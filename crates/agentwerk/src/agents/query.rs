@@ -1,4 +1,4 @@
-//! Parses origin-qualified AQL into queries over tasks and events.
+//! Parses AQL into queries over tasks, events, and task-event joins.
 
 use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
@@ -19,10 +19,11 @@ use crate::event::Event;
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let werk = Werk::new();
-/// werk.find_tasks("task.label = research");
+/// werk.find_tasks("research");
 /// werk.find_tasks(Query::new("task.label = research AND task.assignee = research-1")?);
 /// werk.find_tasks(|t: &Task| t.get_label() == Some("research"));
 /// werk.find_events("event.name = tool_call_failed");
+/// werk.find_events("research AND event.name = tool_call_failed");
 /// werk.find_events(|e: &Event| e.get_name().ends_with("_failed"));
 /// # Ok(())
 /// # }
@@ -34,7 +35,7 @@ pub trait Matcher<R> {
 }
 
 #[cfg(test)]
-mod origin_tests {
+mod tests {
     use super::*;
     use serde_json::json;
 
@@ -72,26 +73,64 @@ mod origin_tests {
 
         for (source, origin) in cases {
             let query = Query::new(source).unwrap_or_else(|error| panic!("{source}: {error}"));
-            assert_eq!(query.0.origin, Some(origin), "{source}");
+            assert_eq!(query.origin(), origin, "{source}");
         }
     }
 
     #[test]
-    fn bare_task_id_and_order_only_queries_infer_an_origin() {
-        assert_eq!(Query::new("t-3").unwrap().0.origin, Some(Origin::Task));
+    fn bare_values_are_task_label_shorthand() {
+        let scan = task("t-1");
+        let review = task("t-2").label("needs review");
+
+        for (source, subject) in [("scan", &scan), ("\"needs review\"", &review)] {
+            let query = Query::new(source).unwrap();
+            assert_eq!(query.origin(), Origin::Task, "{source}");
+            assert!(query.matches_task(subject), "{source}");
+        }
+    }
+
+    #[test]
+    fn bare_task_ids_take_precedence_over_label_shorthand() {
+        let id_match = task("t-3").label("other");
+        let label_match = task("t-4").label("t-3");
+        let query = Query::new("t-3").unwrap();
+
+        assert!(query.matches_task(&id_match));
+        assert!(!query.matches_task(&label_match));
+    }
+
+    #[test]
+    fn order_only_queries_infer_an_origin() {
         assert_eq!(
-            Query::new("ORDER BY event.created DESC").unwrap().0.origin,
-            Some(Origin::Event)
+            Query::new("ORDER BY event.created DESC").unwrap().origin(),
+            Origin::Event
         );
     }
 
     #[test]
-    fn unqualified_and_mixed_fields_are_rejected() {
+    fn blank_queries_are_rejected() {
         assert!(matches!(Query::new("  "), Err(QueryError::TermsMissing)));
-        assert!(matches!(
-            Query::new("label = scan"),
-            Err(QueryError::FieldUnrecognized { .. })
-        ));
+    }
+
+    #[test]
+    fn unqualified_field_expressions_are_rejected() {
+        let error = Query::new("label = scan").unwrap_err();
+
+        assert!(matches!(&error, QueryError::FieldUnrecognized { .. }));
+        assert!(error.to_string().contains("task.label"));
+    }
+
+    #[test]
+    fn bare_event_names_are_task_labels_not_event_shorthand() {
+        let labelled = task("t-1").label(Event::TOOL_CALL_FAILED);
+        let query = Query::new("tool_call_failed").unwrap();
+
+        assert_eq!(query.origin(), Origin::Task);
+        assert!(query.matches_task(&labelled));
+    }
+
+    #[test]
+    fn the_removed_result_namespace_is_rejected() {
         for field in [
             "result.task_id",
             "result.label",
@@ -116,51 +155,94 @@ mod origin_tests {
                 "{field}"
             );
         }
-        assert!(matches!(
-            Query::new("task.label = scan AND event.label = scan"),
-            Err(QueryError::OriginsMixed {
-                first: "task.label",
-                second: "event.label"
-            })
-        ));
-        assert!(matches!(
-            Query::new("task.label = scan ORDER BY event.created"),
-            Err(QueryError::OriginsMixed {
-                first: "task.label",
-                second: "event.created"
-            })
-        ));
     }
 
     #[test]
-    fn grouping_boolean_presence_membership_status_and_time_still_compile() {
+    fn using_both_namespaces_infers_a_joined_source() {
         for source in [
-            "NOT (task.label = scan OR task.status IN (todo, failed))",
-            "task.label != scan",
-            "task.label NOT IN (scan, report)",
-            "task.assignee IS EMPTY",
-            "task.assignee IS NOT EMPTY",
-            "task.input ~ retry",
-            "task.input !~ retry",
-            "task.created > 0",
-            "task.created >= 2026-08-24",
-            "task.finished < -1h",
-            "task.finished <= -1w",
+            "scan AND event.name = task_finished",
+            "task.label = scan AND event.label = scan",
+            "task.label = scan OR event.label = scan",
+            "task.label = scan AND NOT event.name = task_failed",
+            "task.label = scan ORDER BY event.created",
         ] {
-            Query::new(source).unwrap_or_else(|error| panic!("{source}: {error}"));
+            assert_eq!(
+                Query::new(source).unwrap().origin(),
+                Origin::Joined,
+                "{source}"
+            );
         }
-        for status in ["todo", "IN_PROGRESS", "Finished", "failed"] {
-            Query::new(&format!("task.status = {status}"))
-                .unwrap_or_else(|error| panic!("{status}: {error}"));
-        }
-        for name in [
-            Event::TASK_CREATED,
-            Event::REQUEST_RETRIED,
-            "application_event",
+    }
+
+    #[test]
+    fn boolean_membership_presence_and_text_operators_match_tasks() {
+        let scan = task("t-1");
+        let mut report = task("t-2");
+        report.label = Some("report".into());
+        let mut unlabelled = task("t-3");
+        unlabelled.label = None;
+
+        for (source, subject, expected) in [
+            ("task.label IN (scan, review)", &scan, true),
+            ("task.label NOT IN (scan, review)", &report, true),
+            ("NOT (task.label = report OR task.id = t-2)", &scan, true),
+            ("task.assignee IS EMPTY", &scan, true),
+            ("task.assignee IS NOT EMPTY", &scan, false),
+            ("task.input ~ SCAN", &scan, true),
+            ("task.input !~ report", &scan, true),
+            ("task.label != scan", &unlabelled, false),
         ] {
-            Query::new(&format!("event.name = {name}"))
-                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            assert_eq!(
+                Query::new(source).unwrap().matches_task(subject),
+                expected,
+                "{source}"
+            );
         }
+    }
+
+    #[test]
+    fn time_operators_compare_milliseconds_and_accept_dates_and_offsets() {
+        let mut subject = task("t-100");
+        subject.created_at = 100;
+
+        assert!(Query::new("task.created > 99")
+            .unwrap()
+            .matches_task(&subject));
+        assert!(Query::new("task.created <= 100")
+            .unwrap()
+            .matches_task(&subject));
+        assert!(Query::new("task.started IS EMPTY")
+            .unwrap()
+            .matches_task(&subject));
+        Query::new("task.created >= 2026-08-24").unwrap();
+        Query::new("task.finished < -1h").unwrap();
+    }
+
+    #[test]
+    fn statuses_are_canonicalized_before_matching() {
+        let mut subject = task("t-1");
+        subject.status = Status::InProgress;
+
+        for spelling in ["in_progress", "IN_PROGRESS", "In_Progress"] {
+            assert!(Query::new(&format!("task.status = {spelling}"))
+                .unwrap()
+                .matches_task(&subject));
+        }
+    }
+
+    #[test]
+    fn custom_event_names_match_exactly() {
+        let event = Event::new("ApplicationEvent");
+        assert!(Query::new("event.name = ApplicationEvent")
+            .unwrap()
+            .matches_event(&event));
+        assert!(!Query::new("event.name = applicationevent")
+            .unwrap()
+            .matches_event(&event));
+    }
+
+    #[test]
+    fn malformed_statuses_and_times_report_their_error_kind() {
         assert!(matches!(
             Query::new("task.status = unknown"),
             Err(QueryError::StatusUnrecognized { .. })
@@ -169,17 +251,42 @@ mod origin_tests {
             Query::new("task.created > tomorrow"),
             Err(QueryError::TimeMalformed { .. })
         ));
+    }
+
+    #[test]
+    fn fields_reject_operators_for_another_value_kind() {
+        for source in ["task.input = retry", "task.id ~ t-1", "task.created = 0"] {
+            assert!(
+                matches!(
+                    Query::new(source),
+                    Err(QueryError::OperatorNotAllowed { .. })
+                ),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn repeated_equalities_suggest_membership() {
+        let error = Query::new("task.id = t-1 AND task.id = t-2").unwrap_err();
+
+        assert!(matches!(&error, QueryError::FieldRepeated { .. }));
+        assert!(error.to_string().contains("task.id IN (a, b)"));
+    }
+
+    #[test]
+    fn trailing_tokens_are_rejected() {
         assert!(matches!(
-            Query::new("task.input = retry"),
-            Err(QueryError::OperatorNotAllowed { .. })
+            Query::new("task.id = t-1 trailing"),
+            Err(QueryError::TokenRejected { .. })
         ));
+    }
+
+    #[test]
+    fn unfinished_terms_are_rejected() {
         assert!(matches!(
-            Query::new("task.id ~ t-1"),
-            Err(QueryError::OperatorNotAllowed { .. })
-        ));
-        assert!(matches!(
-            Query::new("task.created = 0"),
-            Err(QueryError::OperatorNotAllowed { .. })
+            Query::new("task.id ="),
+            Err(QueryError::TermUnfinished)
         ));
     }
 
@@ -206,14 +313,10 @@ mod origin_tests {
         assert!(Query::new("task.result ~ clean")
             .unwrap()
             .matches_task(&finished));
-        assert!(matches!(
-            Query::new("result.value ~ clean"),
-            Err(QueryError::FieldUnrecognized { .. })
-        ));
     }
 
     #[test]
-    fn task_ids_statuses_and_missing_values_keep_their_sort_order() {
+    fn task_ids_sort_by_their_numeric_suffix() {
         let mut tasks = vec![task("t-10"), task("t-2"), task("t-1")];
         Query::new("ORDER BY task.id")
             .unwrap()
@@ -225,7 +328,11 @@ mod origin_tests {
                 .collect::<Vec<_>>(),
             ["t-1", "t-2", "t-10"]
         );
+    }
 
+    #[test]
+    fn statuses_sort_in_lifecycle_order() {
+        let mut tasks = vec![task("t-1"), task("t-2"), task("t-3")];
         tasks[0].status = Status::Failed;
         tasks[1].status = Status::Finished;
         tasks[2].status = Status::Todo;
@@ -236,7 +343,11 @@ mod origin_tests {
             tasks.iter().map(|task| task.status).collect::<Vec<_>>(),
             [Status::Todo, Status::Finished, Status::Failed]
         );
+    }
 
+    #[test]
+    fn missing_optional_values_sort_last_in_both_directions() {
+        let mut tasks = vec![task("t-1"), task("t-2"), task("t-3")];
         tasks[0].assignee = None;
         tasks[1].assignee = Some("a".into());
         tasks[2].assignee = Some("z".into());
@@ -244,18 +355,73 @@ mod origin_tests {
             .unwrap()
             .sort_tasks(&mut tasks);
         assert_eq!(tasks.last().unwrap().assignee, None);
+
+        Query::new("ORDER BY task.assignee")
+            .unwrap()
+            .sort_tasks(&mut tasks);
+        assert_eq!(tasks.last().unwrap().assignee, None);
     }
 
     #[test]
-    fn a_compiled_query_rejects_the_wrong_target() {
-        let query = Query::new("event.name = task_created").unwrap();
-        assert!(matches!(
-            query.expects_task(),
-            Err(QueryError::OriginMismatch {
-                expected: "task",
-                actual: "event"
-            })
-        ));
+    fn mixed_conditions_are_evaluated_against_one_joined_pair() {
+        let scan = task("t-1");
+        let matching = Event::new(Event::TASK_CREATED)
+            .task_id("t-1")
+            .data(json!({"kind": "scan"}));
+        let other = Event::new(Event::TASK_FAILED).task_id("t-1");
+        let wrong_task = task("t-2").label("report");
+        let query =
+            Query::new("task.label = scan AND event.name = task_created AND event.data ~ scan")
+                .unwrap();
+
+        assert!(query.matches_joined(&scan, &matching));
+        assert!(!query.matches_joined(&scan, &other));
+        assert!(!query.matches_joined(&wrong_task, &matching));
+    }
+
+    #[test]
+    fn joined_boolean_operators_evaluate_each_task_event_pair() {
+        let scan = task("t-1");
+        let report = task("t-2").label("report");
+        let selected = Event::new("selected");
+        let ordinary = Event::new("ordinary");
+        let either = Query::new("task.label = scan OR event.name = selected").unwrap();
+        let neither = Query::new("NOT task.label = report AND NOT event.name = selected").unwrap();
+
+        assert!(either.matches_joined(&scan, &ordinary));
+        assert!(either.matches_joined(&report, &selected));
+        assert!(!either.matches_joined(&report, &ordinary));
+        assert!(neither.matches_joined(&scan, &ordinary));
+        assert!(!neither.matches_joined(&report, &ordinary));
+        assert!(!neither.matches_joined(&scan, &selected));
+    }
+
+    #[test]
+    fn joined_sorting_can_order_events_by_a_task_field() {
+        let first = task("t-1");
+        let second = task("t-2");
+        let mut pairs = vec![
+            (second.clone(), Event::new("second-a")),
+            (first.clone(), Event::new("first-a")),
+            (second, Event::new("second-b")),
+            (first, Event::new("first-b")),
+        ];
+        Query::new("event.name IN (first-a, first-b, second-a, second-b) ORDER BY task.id")
+            .unwrap()
+            .sort_joined(&mut pairs);
+
+        assert_eq!(
+            pairs
+                .iter()
+                .map(|(task, event)| (task.id.as_str(), event.name.as_str()))
+                .collect::<Vec<_>>(),
+            [
+                ("t-1", "first-a"),
+                ("t-1", "first-b"),
+                ("t-2", "second-a"),
+                ("t-2", "second-b"),
+            ]
+        );
     }
 }
 
@@ -300,18 +466,23 @@ impl<R> Matcher<R> for Query {
 pub struct Query(Compiled);
 
 impl Query {
-    /// Compile an AQL string. Every named field must have one origin.
+    /// Compile an AQL string. Task and event fields may be joined through a
+    /// recorded event's task ID. A lone value matches `task.label`, except a
+    /// bare `t-N`, which matches `task.id`.
     ///
     /// ```
     /// use agentwerk::Query;
     ///
     /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
+    /// Query::new("research")?;
+    /// Query::new("\"needs review\"")?;
     /// Query::new("task.status = finished AND task.label IN (scan, report)")?;
     /// Query::new("task.input ~ \"retry budget\" AND task.assignee IS EMPTY")?;
     /// Query::new("t-3")?;
     /// Query::new("task.label = scan ORDER BY task.finished DESC")?;
     /// Query::new("event.name = tool_call_failed")?;
     /// Query::new("event.data ~ timeout AND event.created > -1h")?;
+    /// Query::new("scan AND event.name = task_finished")?;
     /// # Ok(())
     /// # }
     /// # run().unwrap();
@@ -328,6 +499,11 @@ impl Query {
     pub(crate) fn matches_event(&self, event: &Event) -> bool {
         self.assert_origin(Origin::Event);
         self.0.matches(View::Event(event))
+    }
+
+    pub(crate) fn matches_joined(&self, task: &Task, event: &Event) -> bool {
+        self.assert_origin(Origin::Joined);
+        self.0.matches(View::Joined(task, event))
     }
 
     /// Every record, in its origin's default order.
@@ -357,6 +533,11 @@ impl Query {
         self.0.sort_events(records);
     }
 
+    pub(crate) fn sort_joined(&self, records: &mut [(Task, Event)]) {
+        self.assert_origin(Origin::Joined);
+        self.0.sort_joined(records);
+    }
+
     pub(crate) fn task(mut self) -> Query {
         self.0.bind(Origin::Task);
         self
@@ -372,19 +553,15 @@ impl Query {
         self
     }
 
-    pub(crate) fn is_event(&self) -> bool {
-        self.0.origin == Some(Origin::Event)
-    }
-
-    #[doc(hidden)]
-    pub fn expects_task(&self) -> Result<(), QueryError> {
-        self.0.expects(Origin::Task)
+    pub(crate) fn origin(&self) -> Origin {
+        self.0.origin.unwrap_or(Origin::Task)
     }
 
     fn assert_origin(&self, expected: Origin) {
-        self.0
-            .expects(expected)
-            .unwrap_or_else(|error| panic!("invalid query target: {error}"));
+        assert!(
+            self.0.origin.is_none() || self.0.origin == Some(expected),
+            "query resolver must match its source"
+        );
     }
 
     /// Also `status = <status>`, whatever the query already says.
@@ -469,6 +646,8 @@ impl Predicate {
         match (self, record) {
             (Predicate::Task(check), View::Task(task)) => check(task),
             (Predicate::Event(check), View::Event(event)) => check(event),
+            (Predicate::Task(check), View::Joined(task, _)) => check(task),
+            (Predicate::Event(check), View::Joined(_, event)) => check(event),
             _ => false,
         }
     }
@@ -536,8 +715,7 @@ impl Compiled {
     /// Both conditions. The order is this query's, since `other` is the term a
     /// caller never wrote and so never ordered by.
     fn and(self, other: Self) -> Self {
-        let origin = merge_origins(self.origin, other.origin)
-            .expect("internally combined queries must have one origin");
+        let origin = merge_origins(self.origin, other.origin);
         Self {
             root: Condition::All(vec![self.root, other.root]),
             order: self.order.or(other.order),
@@ -579,19 +757,22 @@ impl Compiled {
         }
     }
 
-    fn expects(&self, expected: Origin) -> Result<(), QueryError> {
-        match self.origin {
-            Some(actual) if actual != expected => Err(QueryError::OriginMismatch {
-                expected: expected.name(),
-                actual: actual.name(),
-            }),
-            _ => Ok(()),
+    fn sort_joined(&self, records: &mut [(Task, Event)]) {
+        if let Some(order) = &self.order {
+            records.sort_by(|(left_task, left_event), (right_task, right_event)| {
+                order.compare(
+                    View::Joined(left_task, left_event),
+                    View::Joined(right_task, right_event),
+                )
+            });
         }
     }
 
     fn bind(&mut self, expected: Origin) {
-        self.expects(expected)
-            .unwrap_or_else(|error| panic!("invalid query target: {error}"));
+        assert!(
+            self.origin.is_none() || self.origin == Some(expected),
+            "query binding must not replace its source"
+        );
         self.origin = Some(expected);
     }
 
@@ -603,31 +784,17 @@ impl Compiled {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Origin {
+pub(crate) enum Origin {
     Task,
     Event,
+    Joined,
 }
 
-impl Origin {
-    fn name(self) -> &'static str {
-        match self {
-            Origin::Task => "task",
-            Origin::Event => "event",
-        }
-    }
-}
-
-fn merge_origins(
-    left: Option<Origin>,
-    right: Option<Origin>,
-) -> Result<Option<Origin>, QueryError> {
+fn merge_origins(left: Option<Origin>, right: Option<Origin>) -> Option<Origin> {
     match (left, right) {
-        (Some(left), Some(right)) if left != right => Err(QueryError::OriginsMixed {
-            first: left.name(),
-            second: right.name(),
-        }),
-        (Some(origin), _) | (_, Some(origin)) => Ok(Some(origin)),
-        (None, None) => Ok(None),
+        (Some(left), Some(right)) if left != right => Some(Origin::Joined),
+        (Some(origin), _) | (_, Some(origin)) => Some(origin),
+        (None, None) => None,
     }
 }
 
@@ -635,6 +802,7 @@ fn merge_origins(
 enum View<'a> {
     Task(&'a Task),
     Event(&'a Event),
+    Joined(&'a Task, &'a Event),
 }
 
 impl<'a> View<'a> {
@@ -642,6 +810,11 @@ impl<'a> View<'a> {
         match self {
             View::Task(task) => field.of_task(task),
             View::Event(event) => field.of_event(event),
+            View::Joined(task, event) => match field.origin() {
+                Origin::Task => field.of_task(task),
+                Origin::Event => field.of_event(event),
+                Origin::Joined => unreachable!("fields have one origin"),
+            },
         }
     }
 
@@ -649,6 +822,7 @@ impl<'a> View<'a> {
         match self {
             View::Task(task) => (task.created_at, numeric_id(&task.id)),
             View::Event(event) => (event.created_at, 0),
+            View::Joined(task, event) => (event.created_at, numeric_id(&task.id)),
         }
     }
 }
@@ -930,8 +1104,16 @@ impl Sort {
             true => placed.reverse(),
             false => placed,
         };
-        // Ties keep the record order, so one query always answers one list.
-        placed.then_with(|| left.tie_break().cmp(&right.tie_break()))
+        placed.then_with(|| match (self.field.origin(), left, right) {
+            (Origin::Task, View::Joined(left, _), View::Joined(right, _)) => {
+                (left.created_at, numeric_id(&left.id))
+                    .cmp(&(right.created_at, numeric_id(&right.id)))
+            }
+            (Origin::Event, View::Joined(_, left), View::Joined(_, right)) => {
+                left.created_at.cmp(&right.created_at)
+            }
+            _ => left.tie_break().cmp(&right.tie_break()),
+        })
     }
 }
 
@@ -1077,20 +1259,6 @@ pub enum QueryError {
         /// Valid fields for this record type.
         known: String,
     },
-    /// Fields from two record origins appeared in one query.
-    OriginsMixed {
-        /// Property inferred before the conflict.
-        first: &'static str,
-        /// Conflicting property.
-        second: &'static str,
-    },
-    /// A compiled query was supplied to an operation requiring another origin.
-    OriginMismatch {
-        /// Origin required by the receiving finder.
-        expected: &'static str,
-        /// Origin inferred when the query was compiled.
-        actual: &'static str,
-    },
     /// No status is spelled this way.
     StatusUnrecognized {
         /// Unrecognized status spelling.
@@ -1133,17 +1301,6 @@ impl fmt::Display for QueryError {
             ),
             Self::FieldUnrecognized { name, known } => {
                 write!(f, "No field named `{name}`. Use one of {known}.")
-            }
-            Self::OriginsMixed { first, second } => write!(
-                f,
-                "A query must use one record origin, but `{first}` conflicts with `{second}`."
-            ),
-            Self::OriginMismatch { expected, actual } => {
-                let article = if *expected == "event" { "an" } else { "a" };
-                write!(
-                    f,
-                    "This operation requires {article} {expected} query, but the query has {actual} origin."
-                )
             }
             Self::StatusUnrecognized { value } => write!(
                 f,
@@ -1278,7 +1435,7 @@ fn parse_query(query: &str) -> Result<(Condition, Option<Sort>, Origin), QueryEr
     let mut parser = Parser {
         tokens,
         at: 0,
-        origin_field: None,
+        origin: None,
     };
     // A query naming nothing but an order selects every record, which is how
     // the tasks tool asks for the newest without narrowing first.
@@ -1294,10 +1451,7 @@ fn parse_query(query: &str) -> Result<(Condition, Option<Sort>, Origin), QueryEr
         None => Ok((
             condition,
             order,
-            parser
-                .origin_field
-                .expect("a nonblank query names an origin")
-                .origin(),
+            parser.origin.expect("a nonblank query names an origin"),
         )),
     }
 }
@@ -1305,7 +1459,7 @@ fn parse_query(query: &str) -> Result<(Condition, Option<Sort>, Origin), QueryEr
 struct Parser {
     tokens: Vec<Token>,
     at: usize,
-    origin_field: Option<Field>,
+    origin: Option<Origin>,
 }
 
 impl Parser {
@@ -1399,15 +1553,14 @@ impl Parser {
         self.term()
     }
 
-    /// `field operator value?`, or a bare task ID.
+    /// `field operator value?`, a bare task ID, or a task-label shorthand.
     fn term(&mut self) -> Result<Condition, QueryError> {
         let token = self.next().ok_or(QueryError::TermUnfinished)?;
         let word = match token {
             Token::Word(word) => word,
             Token::Quoted(text) => {
-                return Err(QueryError::TokenRejected {
-                    token: format!("\"{text}\""),
-                })
+                self.record_field(Field::TaskLabel);
+                return Ok(Condition::Term(Field::TaskLabel, Match::Is(text)));
             }
             other => {
                 return Err(QueryError::TokenRejected {
@@ -1417,14 +1570,13 @@ impl Parser {
         };
 
         if !self.at_operator() {
-            if is_task_id(&word) {
-                self.record_field(Field::TaskId)?;
-                return Ok(Condition::Term(Field::TaskId, Match::Is(word)));
-            }
-            return Err(QueryError::FieldUnrecognized {
-                name: word,
-                known: Field::spellings(),
-            });
+            let field = if is_task_id(&word) {
+                Field::TaskId
+            } else {
+                Field::TaskLabel
+            };
+            self.record_field(field);
+            return Ok(Condition::Term(field, Match::Is(word)));
         }
         let field = self.field(word)?;
         let matcher = self.operator(field)?;
@@ -1556,22 +1708,12 @@ impl Parser {
             name,
             known: Field::spellings(),
         })?;
-        self.record_field(field)?;
+        self.record_field(field);
         Ok(field)
     }
 
-    fn record_field(&mut self, field: Field) -> Result<(), QueryError> {
-        if let Some(first) = self.origin_field {
-            if first.origin() != field.origin() {
-                return Err(QueryError::OriginsMixed {
-                    first: first.name(),
-                    second: field.name(),
-                });
-            }
-        } else {
-            self.origin_field = Some(field);
-        }
-        Ok(())
+    fn record_field(&mut self, field: Field) {
+        self.origin = merge_origins(self.origin, Some(field.origin()));
     }
 }
 

@@ -19,7 +19,7 @@
     },
     "aql": {
       "type": "string",
-      "description": "For `list`: which tasks to answer with, in AQL. Fields are `task.id`, `task.label`, `task.status`, `task.pending`, `task.cancelled`, `task.assignee`, `task.parent_id`, `task.input`, `task.result`, `task.errors`, `task.created`, `task.started`, `task.finished`, `task.failed`. Operators are `=`, `!=`, `IN (a, b)`, `NOT IN (a, b)`, `IS EMPTY`, `IS NOT EMPTY`, and on `task.input`, `task.result`, `task.errors` the case-insensitive `~` and `!~`. The four times take `>`, `>=`, `<`, `<=` against a date like `2026-08-24` or an offset back from now like `-30m`, `-2h`, `-7d`, `-1w`; `task.started`, `task.finished`, `task.failed` also read `IS EMPTY`. Combine terms with `AND`, `OR`, `NOT`, and parentheses. Close with `ORDER BY <field> ASC|DESC`; without it tasks arrive oldest first. A lone `t-N` selects that task; other unqualified words are invalid. Status is `todo`, `in_progress`, `finished`, or `failed`. Leave out to answer with every task."
+      "description": "For `list`: which tasks to answer with, in AQL. Task fields are `task.id`, `task.label`, `task.status`, `task.pending`, `task.cancelled`, `task.assignee`, `task.parent_id`, `task.input`, `task.result`, `task.errors`, `task.created`, `task.started`, `task.finished`, `task.failed`. Event fields are `event.name`, `event.agent_id`, `event.task_id`, `event.label`, `event.created`, `event.data`. A query combining both selects task-event pairs linked by `event.task_id`, then returns each referenced task once. Operators are `=`, `!=`, `IN (a, b)`, `NOT IN (a, b)`, `IS EMPTY`, `IS NOT EMPTY`; text fields take case-insensitive `~` and `!~`; time fields take `>`, `>=`, `<`, `<=` against a date like `2026-08-24` or an offset like `-30m`, `-2h`, `-7d`, `-1w`. Combine terms with `AND`, `OR`, `NOT`, and parentheses. Close with `ORDER BY <field> ASC|DESC`. A lone value selects `task.label`; quote it when it contains spaces or query words. A lone `t-N` selects `task.id` instead. Status is `todo`, `in_progress`, `finished`, or `failed`. Leave out to answer with every task."
     },
     "label": {
       "type": "string",
@@ -46,7 +46,7 @@
     { "action": "task" },
     { "action": "result", "id": "t-3" },
     { "action": "list" },
-    { "action": "list", "aql": "task.status = todo AND task.label = review" },
+    { "action": "list", "aql": "review AND task.status = todo" },
     { "action": "list", "aql": "task.input ~ \"retry budget\" AND task.assignee IS EMPTY" },
     { "action": "list", "aql": "task.status = finished ORDER BY task.finished DESC" },
     { "action": "list", "aql": "task.finished IS EMPTY ORDER BY task.created" },

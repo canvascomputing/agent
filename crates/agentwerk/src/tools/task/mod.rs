@@ -208,14 +208,7 @@ fn action_result(werk: &Werk, id: Option<String>, ctx: &ToolContext) -> Event {
 
 fn action_list(werk: &Werk, aql: Option<String>, directives: &DirectiveStore) -> Event {
     let pool: Vec<Task> = match aql.as_deref().map(Query::new) {
-        Some(Ok(query)) => match query.expects_task() {
-            Ok(()) => werk.find_tasks(query),
-            Err(error) => {
-                return Event::error(
-                    directives.render(TASK_QUERY_INVALID, &[("error", &error.to_string())]),
-                )
-            }
-        },
+        Some(Ok(query)) => werk.find_tasks(query),
         Some(Err(error)) => {
             return Event::error(
                 directives.render(TASK_QUERY_INVALID, &[("error", &error.to_string())]),
@@ -478,6 +471,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_accepts_task_label_shorthand() {
+        let werk = werk_with_two_tasks();
+        let ctx = ctx_with(Arc::clone(&werk), "alice");
+        let result = call(
+            TaskTool,
+            serde_json::json!({"action": "list", "aql": "review"}),
+            &ctx,
+        )
+        .await;
+        let text = unwrap_text(&result);
+
+        assert!(text.contains("t-1"), "{text}");
+        assert!(!text.contains("t-2"), "{text}");
+    }
+
+    #[tokio::test]
     async fn list_answers_in_the_order_the_aql_names() {
         let werk = werk_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&werk), "alice");
@@ -541,7 +550,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_rejects_an_event_query_as_a_task_query() {
+    async fn list_projects_an_event_query_to_tasks() {
         let werk = werk_with_two_tasks();
         let ctx = ctx_with(Arc::clone(&werk), "alice");
         let result = call(
@@ -551,8 +560,10 @@ mod tests {
         )
         .await;
 
-        assert!(result.get_name() == Event::TOOL_CALL_FAILED, "{result:?}");
-        assert!(unwrap_text(&result).contains("requires a task query"));
+        assert!(result.get_name() == Event::TOOL_CALL_FINISHED, "{result:?}");
+        let output = unwrap_text(&result);
+        assert!(output.contains("t-1"));
+        assert!(output.contains("t-2"));
     }
 
     #[tokio::test]

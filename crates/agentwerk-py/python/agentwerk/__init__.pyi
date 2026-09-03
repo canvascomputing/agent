@@ -123,11 +123,13 @@ class Reply:
     def __repr__(self) -> str: ...
 
 class Query:
-    """Select tasks or recorded events with AQL.
+    """Select tasks, events, or joined task-event rows with AQL.
 
-    Fields are qualified with ``task.`` or ``event.`` and infer the query's
-    source origin. Read finders project between tasks and events through
-    ``event.task_id``. The query may include ``ORDER BY <field> ASC | DESC``.
+    A lone value is task-label shorthand, except that ``t-N`` selects a task
+    ID. Fields in full expressions are qualified with ``task.`` or ``event.``.
+    Using both evaluates task-event pairs linked through ``event.task_id``. The
+    receiving operation projects matches to its return type. Queries may
+    include ``ORDER BY <field> ASC | DESC``.
     """
 
     def __init__(self, query: str) -> None: ...

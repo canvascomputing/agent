@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 
 use super::super::agent::Agent;
 use super::super::policy::Policy;
-use super::super::query::{Matcher, Query};
+use super::super::query::{Matcher, Origin, Query};
 use super::super::r#loop::run_main_loop;
 use super::super::stats::Stats;
 use super::task::{Status, Task};
@@ -57,6 +57,20 @@ type EventHandler = dyn Fn(&Arc<Werk>, &Event) + Send + Sync;
 /// missing them. `TextChunkReceived` fires once per streaming delta and sets
 /// the volume this has to absorb.
 const EVENT_STREAM_CAPACITY: usize = 1024;
+
+pub(crate) enum CancelFilter {
+    Live(Query),
+    Snapshot(HashSet<String>),
+}
+
+impl CancelFilter {
+    pub(super) fn matches(&self, task: &Task) -> bool {
+        match self {
+            Self::Live(query) => query.matches_task(task),
+            Self::Snapshot(ids) => ids.contains(&task.id),
+        }
+    }
+}
 
 /// One shape for every awaited hook: the task is `None` for the kinds no
 /// task-shaped hook accepts, and the wrapper each `on_*_async` installs picks
@@ -277,7 +291,7 @@ pub struct Werk {
     /// What `cancel` has taken off the Werk. A matching task is neither
     /// claimed nor resumed, and an agent already holding one is taken off it,
     /// while the rest of the run continues.
-    pub(crate) cancel_filters: Mutex<Vec<Query>>,
+    pub(crate) cancel_filters: Mutex<Vec<CancelFilter>>,
     /// How many terminal status transitions are between their status change and
     /// the return of their event handlers. `pending` counts a non-zero value as
     /// pending work, so a handler creating a follow-up task always beats the drain.
@@ -879,8 +893,8 @@ impl Werk {
         self.matching_tasks(&Query::all().task())
     }
 
-    /// Get every task selected by a task query or referenced by an event query.
-    /// The query's source order determines the returned order.
+    /// Get every task selected directly, through matching events, or through
+    /// joined task-event rows. The query's source order determines the result.
     ///
     /// Your condition MUST NOT call another `Werk` method that reads
     /// the task store, or the call deadlocks.
@@ -889,23 +903,30 @@ impl Werk {
         self.tasks_selected_by(&query)
     }
 
-    /// Get the first task selected by a task query or referenced by an event
-    /// query.
+    /// Get the first task selected directly, through a matching event, or
+    /// through a joined task-event row.
     ///
     /// Your condition MUST NOT call another `Werk` method that reads
     /// the task store, or the call deadlocks.
     pub fn find_task(&self, predicate: impl Matcher<Task>) -> Option<Task> {
         let query = predicate.into_query().task_if_originless();
-        match query.is_event() {
-            true => self.tasks_referenced_by(&query).into_iter().next(),
-            false => self.first_matching_task(&query),
+        match query.origin() {
+            Origin::Task => self.first_matching_task(&query),
+            Origin::Event | Origin::Joined => self.tasks_selected_by(&query).into_iter().next(),
         }
     }
 
-    fn tasks_selected_by(&self, query: &Query) -> Vec<Task> {
-        match query.is_event() {
-            true => self.tasks_referenced_by(query),
-            false => self.matching_tasks(query),
+    pub(super) fn tasks_selected_by(&self, query: &Query) -> Vec<Task> {
+        match query.origin() {
+            Origin::Task => self.matching_tasks(query),
+            Origin::Event => self.tasks_referenced_by(query),
+            Origin::Joined => {
+                let mut seen = HashSet::new();
+                self.matching_task_events(query)
+                    .into_iter()
+                    .filter_map(|(task, _)| seen.insert(task.id.clone()).then_some(task))
+                    .collect()
+            }
         }
     }
 
@@ -943,8 +964,26 @@ impl Werk {
             .collect()
     }
 
-    /// Get every event selected by an event query or attached to tasks selected
-    /// by a task query, in source-query order.
+    fn matching_task_events(&self, query: &Query) -> Vec<(Task, Event)> {
+        let mut events = Vec::new();
+        let _ = Stats::for_each_event(&self.get_dir(), |event| events.push(event.clone()));
+        let store = self.tasks.lock().unwrap();
+        let mut pairs: Vec<(Task, Event)> = events
+            .into_iter()
+            .filter_map(|event| {
+                let task = store.get(&event.task_id)?;
+                query
+                    .matches_joined(task, &event)
+                    .then(|| (task.clone(), event))
+            })
+            .collect();
+        drop(store);
+        query.sort_joined(&mut pairs);
+        pairs
+    }
+
+    /// Get every event selected directly, attached to matching tasks, or from
+    /// matching joined task-event rows, in source-query order.
     ///
     /// The condition is an AQL string, a [`Query`](crate::Query), or a
     /// closure, the way [`Self::find_tasks`] takes any of the three.
@@ -962,18 +1001,15 @@ impl Werk {
     /// naming it never matches.
     pub fn find_events(&self, matcher: impl Matcher<Event>) -> Vec<Event> {
         let query = matcher.into_query().event_if_originless();
-        match query.is_event() {
-            true => self.matching_events(&query),
-            false => self.events_referencing_tasks(&query),
-        }
+        self.events_selected_by(&query)
     }
 
-    /// Get the first event selected by an event query or attached to a task
-    /// selected by a task query.
+    /// Get the first event selected directly, through a matching task, or from
+    /// a matching joined task-event row.
     pub fn find_event(&self, matcher: impl Matcher<Event>) -> Option<Event> {
         let query = matcher.into_query().event_if_originless();
-        if !query.is_event() {
-            return self.events_referencing_tasks(&query).into_iter().next();
+        if query.origin() != Origin::Event {
+            return self.events_selected_by(&query).into_iter().next();
         }
         // Without an order the log's own is the answer, so one match ends the
         // read instead of the whole log being copied to be sorted.
@@ -984,6 +1020,18 @@ impl Werk {
         let mut found = self.collect_events(&query, wanted);
         query.sort_events(&mut found);
         found.into_iter().next()
+    }
+
+    fn events_selected_by(&self, query: &Query) -> Vec<Event> {
+        match query.origin() {
+            Origin::Task => self.events_referencing_tasks(query),
+            Origin::Event => self.matching_events(query),
+            Origin::Joined => self
+                .matching_task_events(query)
+                .into_iter()
+                .map(|(_, event)| event)
+                .collect(),
+        }
     }
 
     fn matching_events(&self, query: &Query) -> Vec<Event> {
@@ -1025,6 +1073,8 @@ impl Werk {
     /// is taken off it; the task stays `in_progress`. Nothing waits: this is
     /// not async, so it can be called from a ctrl-c handler, a drop guard, or
     /// anywhere else. Use [`Self::cancel_all_tasks`] to stop the whole run.
+    /// Task-only queries remain live for tasks added later. Event and joined
+    /// queries snapshot the task IDs they currently select.
     ///
     /// Your filter MUST NOT call another `Werk` method that reads the
     /// task store, or the claim path deadlocks.
@@ -1032,14 +1082,37 @@ impl Werk {
     /// ```no_run
     /// # use agentwerk::Werk;
     /// let werk = Werk::new();
-    /// werk.cancel_tasks("task.label = scan");
+    /// werk.cancel_tasks("scan");
     /// ```
     pub fn cancel_tasks(&self, matches: impl Matcher<Task>) -> &Self {
-        let query = matches.into_query().task();
-        self.cancel_filters.lock().unwrap().push(query.clone());
-        for task in self.tasks.lock().unwrap().values_mut() {
-            if query.matches_task(task) {
-                task.cancelled = true;
+        let query = matches.into_query().task_if_originless();
+        match query.origin() {
+            Origin::Task => {
+                self.cancel_filters
+                    .lock()
+                    .unwrap()
+                    .push(CancelFilter::Live(query.clone()));
+                for task in self.tasks.lock().unwrap().values_mut() {
+                    if query.matches_task(task) {
+                        task.cancelled = true;
+                    }
+                }
+            }
+            Origin::Event | Origin::Joined => {
+                let ids: HashSet<String> = self
+                    .tasks_selected_by(&query)
+                    .into_iter()
+                    .map(|task| task.id)
+                    .collect();
+                for task in self.tasks.lock().unwrap().values_mut() {
+                    if ids.contains(&task.id) {
+                        task.cancelled = true;
+                    }
+                }
+                self.cancel_filters
+                    .lock()
+                    .unwrap()
+                    .push(CancelFilter::Snapshot(ids));
             }
         }
         self
@@ -1060,21 +1133,53 @@ impl Werk {
     /// subset. A task is pending while it is todo or in progress,
     /// uncancelled, and not paused for a caller reply.
     pub(crate) fn pending(&self, matches: &Query) -> bool {
-        // A terminal transition mid-flight may still add a follow-up task
-        // from a handler, so it counts as work whatever the store says.
+        match matches.origin() {
+            Origin::Task => {
+                // A terminal transition mid-flight may still add a follow-up task
+                // from a handler, so it counts as work whatever the store says.
+                if self.terminal_transitions_in_flight.load(Ordering::SeqCst) > 0 {
+                    return true;
+                }
+                let interactive = self.interactive_agents();
+                let tasks = self.tasks.lock().unwrap();
+                tasks.values().any(|task| {
+                    matches.matches_task(task) && Self::task_is_pending(task, &interactive)
+                })
+            }
+            Origin::Event | Origin::Joined => {
+                let ids: Vec<String> = self
+                    .tasks_selected_by(matches)
+                    .into_iter()
+                    .map(|task| task.id)
+                    .collect();
+                self.pending_ids(&ids)
+            }
+        }
+    }
+
+    fn pending_ids(&self, ids: &[String]) -> bool {
+        if ids.is_empty() {
+            return false;
+        }
         if self.terminal_transitions_in_flight.load(Ordering::SeqCst) > 0 {
             return true;
         }
         let interactive = self.interactive_agents();
         let tasks = self.tasks.lock().unwrap();
-        tasks.values().any(|t| {
-            matches.matches_task(t)
-                && t.is_pending()
-                && !(t.is_paused()
-                    && t.assignee
-                        .as_deref()
-                        .is_some_and(|a| interactive.contains(a)))
+        ids.iter().any(|id| {
+            tasks
+                .get(id)
+                .is_some_and(|task| Self::task_is_pending(task, &interactive))
         })
+    }
+
+    fn task_is_pending(task: &Task, interactive: &HashSet<String>) -> bool {
+        task.is_pending()
+            && !(task.is_paused()
+                && task
+                    .assignee
+                    .as_deref()
+                    .is_some_and(|agent| interactive.contains(agent)))
     }
 
     /// Why the run is over, or `None` while it should keep going.
@@ -1211,7 +1316,7 @@ impl Werk {
     /// Wait for the matching tasks to be done, then get their results in
     /// query order, or creation order when the query names none.
     ///
-    /// Name a label to wait for one pool, or an ID to wait for one task;
+    /// Name task state, recorded events, or both to select what to wait for;
     /// [`Self::finish_all_tasks`] waits for the whole run. The wait ends once no
     /// matching task has work left for an agent, which covers one that
     /// finished, failed, was cancelled, or is paused awaiting your reply.
@@ -1231,20 +1336,35 @@ impl Werk {
     /// # use agentwerk::Werk;
     /// # async fn run() {
     /// let werk = Werk::new();
-    /// for finding in werk.finish_tasks("task.label = research").await {
+    /// for finding in werk.finish_tasks("research").await {
     ///     println!("{finding}");
     /// }
     /// # }
     /// ```
     pub async fn finish_tasks(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
-        let query = matches.into_query().task();
+        let query = matches.into_query().task_if_originless();
+        let snapshot = match query.origin() {
+            Origin::Task => None,
+            Origin::Event | Origin::Joined => Some(
+                self.tasks_selected_by(&query)
+                    .into_iter()
+                    .map(|task| task.id)
+                    .collect::<Vec<_>>(),
+            ),
+        };
+        if snapshot.as_ref().is_some_and(Vec::is_empty) {
+            return Vec::new();
+        }
         if self.join_handle.lock().unwrap().is_none()
             && (!self.run.is_finished() || self.anything_claimable())
         {
             self.start();
         }
         let mut stream = self.event_stream.subscribe();
-        while self.pending(&query) {
+        while snapshot
+            .as_ref()
+            .map_or_else(|| self.pending(&query), |ids| self.pending_ids(ids))
+        {
             let ended = self.next_event_or_end(&mut stream).await;
             self.await_handlers().await;
             if ended {
@@ -1264,12 +1384,24 @@ impl Werk {
         if self.run.is_finished() {
             self.join_handle.lock().unwrap().take();
         }
-        // `and_status`, not the `find_results` default: a caller who waited on
-        // `task.status = todo` receives finished results, not the matching unfinished tasks.
-        self.matching_tasks(&query.and_task_status(Status::Finished))
-            .into_iter()
-            .filter_map(|t| t.result)
-            .collect()
+        match snapshot {
+            Some(ids) => {
+                let tasks = self.tasks.lock().unwrap();
+                ids.into_iter()
+                    .filter_map(|id| tasks.get(&id))
+                    .filter(|task| task.status == Status::Finished)
+                    .filter_map(|task| task.result.clone())
+                    .collect()
+            }
+            None => {
+                // `and_status`, not the `find_results` default: a caller who waited on
+                // `task.status = todo` receives finished results, not the matching unfinished tasks.
+                self.matching_tasks(&query.and_task_status(Status::Finished))
+                    .into_iter()
+                    .filter_map(|task| task.result)
+                    .collect()
+            }
+        }
     }
 
     /// Wait for every task to be done, then get every result in creation
@@ -1341,17 +1473,17 @@ impl Werk {
         self.find_results(Query::all().task())
     }
 
-    /// Get every result whose task is selected directly or through a matching
-    /// event, in source-query order.
+    /// Get every result whose task is selected directly, through a matching
+    /// event, or through a joined task-event row, in source-query order.
     ///
-    /// A task query defaults status to `finished` when it names none. Event
-    /// queries always project only finished tasks. A task contributes a result
-    /// only when it has one, so this is shorter than the set the filter named.
+    /// Status defaults to `finished` when the query names none. A task
+    /// contributes a result only when it has one, so this is shorter than the
+    /// set the filter named.
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
     /// let werk = Werk::new();
-    /// let scans = werk.find_results("task.label = scan");
+    /// let scans = werk.find_results("scan");
     /// ```
     pub fn find_results(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
         self.result_tasks(matches)
@@ -1372,19 +1504,12 @@ impl Werk {
     }
 
     fn result_tasks(&self, matches: impl Matcher<Task>) -> Vec<Task> {
-        let query = matches.into_query().task_if_originless();
-        if query.is_event() {
-            return self
-                .tasks_referenced_by(&query)
-                .into_iter()
-                .filter(|task| task.status == Status::Finished && task.result.is_some())
-                .collect();
-        }
-        self.matching_tasks(
-            &query
-                .default_task_status(Status::Finished)
-                .and_task_result(),
-        )
+        let query = matches
+            .into_query()
+            .task_if_originless()
+            .default_task_status(Status::Finished)
+            .and_task_result();
+        self.tasks_selected_by(&query)
     }
 }
 
@@ -1539,14 +1664,19 @@ mod tests {
     }
 
     #[test]
-    fn compiled_queries_work_with_singular_and_plural_finders() {
+    fn compiled_label_shorthand_works_with_all_finders() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::labeled("scan", "a"));
         attach_done_result(&werk, "t-1", "clean");
 
-        let tasks = Query::new("task.label = scan").unwrap();
+        let tasks = Query::new("scan").unwrap();
         assert_eq!(werk.find_task(tasks.clone()).unwrap().id, "t-1");
         assert_eq!(werk.find_tasks(tasks.clone()).len(), 1);
+        assert_eq!(werk.find_event(tasks.clone()).unwrap().task_id, "t-1");
+        assert!(werk
+            .find_events(tasks.clone())
+            .iter()
+            .all(|event| event.task_id == "t-1"));
         assert_eq!(
             werk.find_result(tasks.clone()),
             Some(serde_json::json!("clean"))
@@ -1784,10 +1914,184 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "requires a task query")]
-    fn lifecycle_operations_still_reject_event_queries() {
+    fn event_cancellation_snapshots_current_task_references() {
         let (werk, _tmp) = test_werk();
+        werk.add_task("already present");
         werk.cancel_tasks(Query::new("event.name = task_created").unwrap());
+        werk.add_task("added after the snapshot");
+
+        assert!(werk.get_task("t-1").unwrap().cancelled);
+        assert!(!werk.get_task("t-2").unwrap().cancelled);
+    }
+
+    #[test]
+    fn joined_lifecycle_queries_select_current_tasks() {
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "first"));
+        werk.add_task(Task::labeled("report", "second"));
+        let joined = Query::new("scan AND event.name = task_created").unwrap();
+
+        assert!(werk.pending(&joined));
+        assert_eq!(werk.claim(&joined, "agent"), Some("t-1".into()));
+        werk.cancel_tasks(joined);
+        assert!(werk.get_task("t-1").unwrap().cancelled);
+        assert!(!werk.get_task("t-2").unwrap().cancelled);
+    }
+
+    #[tokio::test]
+    async fn event_finish_uses_a_snapshot_that_future_events_do_not_expand() {
+        let (werk, tmp) = test_werk();
+        let results = werk.finish_tasks("event.name = selected").await;
+        werk.add_task("later");
+        attach_done_result(&werk, "t-1", "late");
+        Stats::append(tmp.path(), &Event::new("selected").task_id("t-1")).unwrap();
+
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn joined_finish_returns_results_in_join_order() {
+        let (werk, tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "first"));
+        werk.add_task(Task::labeled("scan", "second"));
+        attach_done_result(&werk, "t-1", "one");
+        attach_done_result(&werk, "t-2", "two");
+        Stats::append(
+            tmp.path(),
+            &Event {
+                created_at: 200,
+                ..Event::new("selected").task_id("t-2")
+            },
+        )
+        .unwrap();
+        Stats::append(
+            tmp.path(),
+            &Event {
+                created_at: 100,
+                ..Event::new("selected").task_id("t-1")
+            },
+        )
+        .unwrap();
+
+        let results = werk
+            .finish_tasks("task.label = scan AND event.name = selected ORDER BY event.created DESC")
+            .await;
+        assert_eq!(
+            results,
+            [serde_json::json!("two"), serde_json::json!("one")]
+        );
+    }
+
+    #[test]
+    fn mixed_queries_project_joined_rows_through_all_read_finders() {
+        let (werk, tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "first"));
+        werk.add_task(Task::labeled("scan", "second"));
+        werk.add_task(Task::labeled("report", "third"));
+        attach_done_result(&werk, "t-1", "one");
+        attach_done_result(&werk, "t-2", "two");
+        attach_done_result(&werk, "t-3", "three");
+        for (task_id, created_at) in [("t-1", 100), ("t-2", 200), ("t-1", 300)] {
+            Stats::append(
+                tmp.path(),
+                &Event {
+                    created_at,
+                    ..Event::new("selected").task_id(task_id)
+                },
+            )
+            .unwrap();
+        }
+        let query =
+            Query::new("scan AND event.name = selected ORDER BY event.created DESC").unwrap();
+
+        assert_eq!(
+            werk.find_tasks(query.clone())
+                .into_iter()
+                .map(|task| task.id)
+                .collect::<Vec<_>>(),
+            ["t-1", "t-2"]
+        );
+        assert_eq!(werk.find_task(query.clone()).unwrap().id, "t-1");
+        assert_eq!(
+            werk.find_events(query.clone())
+                .into_iter()
+                .map(|event| event.task_id)
+                .collect::<Vec<_>>(),
+            ["t-1", "t-2", "t-1"]
+        );
+        assert_eq!(werk.find_event(query.clone()).unwrap().task_id, "t-1");
+        assert_eq!(
+            werk.find_results(query.clone()),
+            [serde_json::json!("one"), serde_json::json!("two")]
+        );
+        assert_eq!(werk.find_result(query), Some(serde_json::json!("one")));
+    }
+
+    #[test]
+    fn mixed_queries_use_pair_level_boolean_and_inner_join_semantics() {
+        let (werk, tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "first"));
+        werk.add_task(Task::labeled("report", "second"));
+        for event in [
+            Event::new("ordinary").task_id("t-1"),
+            Event::new("selected").task_id("t-2"),
+            Event::new("selected"),
+            Event::new("selected").task_id("t-404"),
+        ] {
+            Stats::append(tmp.path(), &event).unwrap();
+        }
+
+        let events = werk.find_events("task.label = scan OR event.name = selected");
+        assert!(events.iter().any(|event| event.name == "ordinary"));
+        assert!(events
+            .iter()
+            .any(|event| event.name == "selected" && event.task_id == "t-2"));
+        assert!(events.iter().all(|event| !event.task_id.is_empty()));
+        assert!(events.iter().all(|event| event.task_id != "t-404"));
+
+        assert!(werk
+            .find_events("task.label = scan AND NOT event.name = ordinary")
+            .iter()
+            .all(|event| event.task_id == "t-1" && event.name != "ordinary"));
+    }
+
+    #[test]
+    fn joined_ordering_can_use_task_fields_and_keeps_each_tasks_log_order() {
+        let (werk, tmp) = test_werk();
+        werk.add_task("first");
+        werk.add_task("second");
+        for (name, task_id) in [
+            ("second-a", "t-2"),
+            ("first-a", "t-1"),
+            ("second-b", "t-2"),
+            ("first-b", "t-1"),
+        ] {
+            Stats::append(tmp.path(), &Event::new(name).task_id(task_id)).unwrap();
+        }
+
+        let names = werk
+            .find_events(
+                "task.id IN (t-1, t-2) AND event.name IN (second-a, first-a, second-b, first-b) ORDER BY task.id",
+            )
+            .into_iter()
+            .map(|event| event.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["first-a", "first-b", "second-a", "second-b"]);
+    }
+
+    #[test]
+    fn joined_result_queries_honor_an_explicit_unfinished_status() {
+        let (werk, _tmp) = test_werk();
+        werk.add_task(Task::labeled("scan", "work"));
+        werk.set_result("t-1", serde_json::json!("mid-flight"))
+            .unwrap();
+
+        assert_eq!(
+            werk.find_results(
+                "task.status = todo AND event.name = task_created ORDER BY event.created"
+            ),
+            [serde_json::json!("mid-flight")]
+        );
     }
 
     #[test]
@@ -1798,6 +2102,23 @@ mod tests {
         let found = werk.find_tasks("task.label = report AND task.status = todo");
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].task, serde_json::json!("b"));
+    }
+
+    #[test]
+    fn a_bare_event_name_selects_a_task_label() {
+        let (werk, tmp) = test_werk();
+        werk.add_task(Task::labeled(Event::TOOL_CALL_FAILED, "label match"));
+        werk.add_task(Task::labeled("other", "event match"));
+        Stats::append(
+            tmp.path(),
+            &Event::new(Event::TOOL_CALL_FAILED).task_id("t-2"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            werk.find_task("tool_call_failed").unwrap().task,
+            serde_json::json!("label match")
+        );
     }
 
     #[test]
@@ -1857,7 +2178,7 @@ mod tests {
     fn not_pending_on_a_cancelled_task() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::new("a").label("research"));
-        werk.cancel_tasks("task.label = research");
+        werk.cancel_tasks("research");
         assert!(!werk.pending(&Query::all()));
     }
 
@@ -3021,7 +3342,7 @@ mod tests {
         attach_done_result(&werk, "t-2", "reported");
 
         assert_eq!(
-            werk.finish_tasks("task.label = scan").await,
+            werk.finish_tasks("scan").await,
             vec![serde_json::json!("scanned")]
         );
     }

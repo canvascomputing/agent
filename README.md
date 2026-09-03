@@ -302,24 +302,21 @@ See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
 
 ### Queries
 
-Agent Query Language (AQL) filters tasks, events, and results. Pass an AQL
-string directly, or compile it with `Query::new` to reuse it.
-
-Each query selects tasks with `task.*` fields or events with `event.*` fields;
-it cannot mix the two. All `find_*` methods accept either query. A task query
-passed to `find_events` returns events attached to the matching tasks. An event
-query passed to a task or result finder returns the referenced tasks or their
-results.
+Agent Query Language (AQL) filters tasks and events. Pass an AQL string
+directly, or compile it with `Query::new` to reuse it.
 
 ```rust
 // Find tasks labeled `scan`.
-werk.find_tasks("task.label = scan");
+werk.find_tasks("scan");
 
 // Find tasks referenced by failed tool-call events.
 werk.find_tasks("event.name = tool_call_failed");
 
 // Find events attached to tasks labeled `scan`.
-werk.find_events("task.label = scan");
+werk.find_events("scan");
+
+// Find failed tool calls from scan tasks.
+werk.find_events("scan AND event.name = tool_call_failed");
 
 // Find the result produced by task `t-3`.
 werk.find_results("t-3");
@@ -341,7 +338,8 @@ werk.find_results("event.name = task_finished");
 | **Search** | `field ~ text`, `field !~ text` | Include or exclude case-insensitive text. |
 | **Compare** | `field > value`, `>=`, `<`, `<=` | Compare a time field. |
 | **Combine** | `A AND B`, `A OR B`, `NOT A`, `(A OR B)` | Combine or group conditions. |
-| **Task ID** | `t-3` | Short for `task.id = t-3`; this is the only unqualified form. |
+| **Task label** | `scan`, `"needs review"` | Short for `task.label = scan`; quote labels containing spaces or query words. |
+| **Task ID** | `t-3` | Short for `task.id = t-3`; IDs take precedence over labels. |
 | **Sort** | `ORDER BY field DESC` | Sort matches; `ASC` is the default. |
 
 #### Fields
@@ -351,9 +349,17 @@ werk.find_results("event.name = task_finished");
 | **Task** | `task.id`, `task.label`, `task.status`, `task.pending`, `task.cancelled`, `task.assignee`, `task.parent_id`, `task.input`, `task.result`, `task.errors`, `task.created`, `task.started`, `task.finished`, `task.failed` |
 | **Event** | `event.name`, `event.agent_id`, `event.task_id`, `event.label`, `event.created`, `event.data` |
 
-Result finders return raw results from referenced tasks. Task queries default
-`task.status` to `finished` unless they name a status; Event queries always
-select finished tasks. Tasks without results are skipped.
+Queries using both namespaces are inner joins: events without a task and events
+whose task no longer exists do not match. Without `ORDER BY`, joined matches
+stay in event-log order. Ordering may use a task or event field.
+
+Result finders return raw task results. They require `task.result` to be present
+and default `task.status` to `finished` unless the query names a status.
+
+Task, event, and joined AQL also work with `finish_*` and `cancel_tasks`. Event
+and joined queries snapshot the task IDs they reference when the operation
+starts. Task-only cancellation stays live and also applies to later matching
+tasks.
 
 #### Rules
 
@@ -366,7 +372,7 @@ Write the field, followed by what it must match:
 
 Missing values do not match `!=`. For example, `task.label != scan` leaves out tasks with no label. To include them, use `task.label IS EMPTY OR task.label != scan`.
 
-Quote values containing spaces: `task.label = "needs review"`. Put lists in parentheses: `task.label IN (scan, report)`.
+Use a lone value as task-label shorthand: `scan` means `task.label = scan`, and `"needs review"` supports spaces or query words. Qualify fields in full expressions such as `task.label = scan`. Put lists in parentheses: `task.label IN (scan, report)`.
 
 Use parentheses when mixing `AND` and `OR` to make the order clear. `NOT` applies to the condition or parenthesized group after it. Query words such as `AND` ignore case; labels and IDs do not.
 
@@ -377,7 +383,7 @@ Times accept UTC dates such as `2026-08-30`, epoch milliseconds, or offsets such
 #### Examples
 
 ```rust
-werk.find_results("task.label = report AND task.result ~ risk");
+werk.find_results("report AND task.result ~ risk");
 werk.find_tasks("task.errors ~ tool_call_failed");
 werk.find_tasks("task.status = todo AND task.assignee IS EMPTY");
 werk.find_tasks("task.failed > -1h ORDER BY task.failed DESC");

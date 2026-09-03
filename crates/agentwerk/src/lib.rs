@@ -68,7 +68,7 @@
 //! - [`Agent`]: picks up tasks and produces results.
 //! - [`Werk`]: stores tasks and runs agents.
 //! - [`Task`]: defines work with an optional label and schema.
-//! - [`Query`]: a reusable origin-aware AQL selection over tasks or events.
+//! - [`Query`]: a reusable AQL selection over tasks, events, or joined task-event pairs.
 //! - [`Knowledge`]: durable memory the agent shares across tasks and other agents.
 //! - [`Event`]: records requests, tool usage, failures, and other activity.
 //! - [`tools`]: the built-in tools agents call, for files, search, commands, web, knowledge, and tasks.

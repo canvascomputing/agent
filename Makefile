@@ -1,4 +1,4 @@
-.PHONY: build test test_integration fmt clean update use_case litellm bump doc hooks skills python python_test python_test_integration check_names
+.PHONY: build test test_integration bench_aql fmt clean update use_case litellm bump doc hooks skills python python_test python_test_integration check_names
 
 CLAUDE_SKILLS_DIR := $(HOME)/.claude/skills
 OPENCODE_SKILLS_DIR := $(HOME)/.config/opencode/skills
@@ -27,6 +27,12 @@ ifdef name
 else
 	RUSTFLAGS="-D warnings" cargo test --test integration -- --nocapture --test-threads=1
 endif
+
+# Benchmark AQL compilation and selection. Pass benchmark arguments with args.
+# Usage: make bench_aql
+#        make bench_aql args='joined/find_tasks --save-baseline before'
+bench_aql:
+	cargo bench -p agentwerk --bench aql -- $(args)
 
 # Build and install the Python bindings into the active environment.
 python:
