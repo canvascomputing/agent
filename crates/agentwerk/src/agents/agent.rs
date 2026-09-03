@@ -84,7 +84,6 @@ pub struct Agent {
     model: Option<Model>,
     role: String,
     templates: Vec<(String, String)>,
-    handover: Option<Task>,
     tools: Vec<Tool>,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
@@ -106,7 +105,6 @@ impl Clone for Agent {
             model: self.model.clone(),
             role: self.role.clone(),
             templates: self.templates.clone(),
-            handover: self.handover.clone(),
             tools: self.tools.clone(),
             dir: self.dir.clone(),
             knowledge: Arc::clone(&self.knowledge),
@@ -137,7 +135,6 @@ impl Agent {
             interactive: false,
             werk: WerkRef::private(Werk::new()),
             templates: Vec::new(),
-            handover: None,
             tools: Vec::new(),
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
@@ -239,26 +236,6 @@ impl Agent {
         self
     }
 
-    /// Configure the one task this agent creates when it finishes its work.
-    ///
-    /// The task must carry a non-blank label. Its body and schema prefill the
-    /// model-facing `handover` object, so the model may finish with only its
-    /// result. Calling this again replaces the prior handover.
-    pub fn handover(mut self, task: Task) -> Self {
-        let label = task
-            .label
-            .as_deref()
-            .filter(|label| !label.trim().is_empty())
-            .expect("Agent::handover requires a labeled task")
-            .to_string();
-        let mut handover = Task::new(task.task).label(label);
-        if let Some(schema) = task.schema {
-            handover = handover.schema(schema);
-        }
-        self.handover = Some(handover);
-        self
-    }
-
     /// Register a tool the agent may call.
     pub fn tool(mut self, tool: impl Into<Tool>) -> Self {
         self.register_tool(tool);
@@ -350,17 +327,11 @@ impl Agent {
         let mut tools = self.tools.clone();
         if tools.iter().any(|tool| tool.get_name() == FinishTool::NAME) {
             tools.retain(|tool| tool.get_name() != FinishTool::NAME);
-            tools.push(FinishTool::from_schema(
-                task.schema.clone(),
-                self.handover.clone(),
-            ));
+            tools.push(FinishTool::from_schema(task.schema.clone()));
         }
         if tools.iter().any(|tool| tool.get_name() == EventTool::NAME) {
             tools.retain(|tool| tool.get_name() != EventTool::NAME);
-            tools.push(EventTool::from_schema(
-                task.schema.clone(),
-                self.handover.clone(),
-            ));
+            tools.push(EventTool::from_schema(task.schema.clone()));
         }
         tools
     }
@@ -400,11 +371,6 @@ impl Agent {
 
     pub(super) fn get_directives(&self) -> Arc<DirectiveStore> {
         Arc::clone(&self.directives)
-    }
-
-    #[cfg(test)]
-    fn get_handover(&self) -> Option<Task> {
-        self.handover.clone()
     }
 
     pub(super) fn get_dir(&self) -> PathBuf {
@@ -560,7 +526,6 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
-    use crate::agents::tasks::Status;
     use crate::event::Event;
     use crate::providers::TokenUsage;
 
@@ -596,47 +561,6 @@ mod tests {
         let agent = Agent::new().label("research").label("math");
         assert!(handles(&agent, Some("math")));
         assert!(!handles(&agent, Some("research")));
-    }
-
-    #[test]
-    fn handover_replaces_the_previous_task() {
-        let agent = Agent::new()
-            .handover(Task::labeled("research", "find leads"))
-            .handover(Task::labeled("report", serde_json::json!({"write": true})));
-
-        let handover = agent.get_handover().unwrap();
-        assert_eq!(handover.get_label(), Some("report"));
-        assert_eq!(handover.get_task(), &serde_json::json!({"write": true}));
-    }
-
-    #[test]
-    fn handover_keeps_only_label_task_and_schema() {
-        let schema = crate::Schema::new(serde_json::json!({"type": "string"})).unwrap();
-        let mut task = Task::labeled("report", "write")
-            .schema(schema)
-            .parent("old-parent");
-        task.id = "old-id".into();
-        task.reporter = "old-reporter".into();
-        task.assignee = Some("old-assignee".into());
-        task.status = Status::Finished;
-        task.result = Some(serde_json::json!("old-result"));
-
-        let handover = Agent::new().handover(task).get_handover().unwrap();
-        assert_eq!(handover.get_label(), Some("report"));
-        assert_eq!(handover.get_task(), "write");
-        assert!(handover.get_schema().is_some());
-        assert_eq!(handover.get_id(), "");
-        assert_eq!(handover.get_status(), Status::Todo);
-        assert_eq!(handover.get_reporter(), "");
-        assert_eq!(handover.get_assignee(), None);
-        assert_eq!(handover.get_parent(), None);
-        assert_eq!(handover.get_result(), None);
-    }
-
-    #[test]
-    #[should_panic(expected = "Agent::handover requires a labeled task")]
-    fn handover_requires_a_label() {
-        let _ = Agent::new().handover(Task::new("write"));
     }
 
     #[test]

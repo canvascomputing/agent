@@ -784,14 +784,6 @@ mod tests {
     }
 
     #[test]
-    fn task_parent_builder_round_trips() {
-        let (werk, _tmp) = test_werk();
-        werk.add_task(Task::new("child body").parent("t-1"));
-        let stored = werk.get_task("t-1").unwrap();
-        assert_eq!(stored.parent.as_deref(), Some("t-1"));
-    }
-
-    #[test]
     fn write_tool_output_returns_relative_path_and_writes_absolute() {
         let (werk, dir) = test_werk();
         werk.add_task("seed");
@@ -818,7 +810,7 @@ mod tests {
     fn a_logged_event_names_the_agent_that_caused_it() {
         let (werk, dir) = test_werk();
         werk.add_task("first");
-        werk.add_task(Task::new("child").parent("t-1"));
+        werk.add_task("second");
         let lines = read_events_log(dir.path());
         assert_eq!(lines.len(), 2);
         // The reporter, since a task is created by whoever filed it.
@@ -1000,7 +992,6 @@ mod tests {
             "finished_at": null,
             "failed_at": null,
             "result": null,
-            "parent": null,
         });
         std::fs::write(
             task_dir.join("task.json"),
@@ -1045,7 +1036,6 @@ mod tests {
             "started_at": null,
             "finished_at": null,
             "failed_at": null,
-            "parent": null,
         });
         std::fs::write(
             task_dir.join("task.json"),
@@ -1069,6 +1059,25 @@ mod tests {
 
         assert_eq!(record["id"], "t-1");
         assert!(record.get("key").is_none());
+        assert!(record.get("parent").is_none());
+    }
+
+    #[test]
+    fn load_ignores_the_removed_parent_field() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let original = Werk::new();
+        original.set_dir(dir.path().to_path_buf());
+        original.add_task("hello");
+        drop(original);
+
+        let task_file = dir.path().join("tasks").join("t-1").join("task.json");
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&task_file).unwrap()).unwrap();
+        record["parent"] = serde_json::json!("t-0");
+        std::fs::write(&task_file, serde_json::to_vec(&record).unwrap()).unwrap();
+
+        let resumed = Werk::load(dir.path()).unwrap();
+        assert_eq!(resumed.get_task("t-1").unwrap().get_task(), "hello");
     }
 
     #[test]

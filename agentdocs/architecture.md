@@ -31,14 +31,14 @@ The invariants that govern orchestration, tools, providers, events, and durable 
 - Define pending work as unfinished, uncancelled work selected by the query; a task paused for caller input does not keep a `finish_*` wait open.
 - Keep cancellation scoped to the current run: `start()` clears cancellation without changing `Status`.
 
-## Completion and Handovers
+## Completion
 
 **Finish tasks through the completion engine owned by `EventTool` and wrapped by `FinishTool`.**
 
 - Register `FinishTool` automatically for non-interactive agents; interactive agents pause and the host ends them with `Werk::set_task_finished`.
 - Bind an object `Schema` directly as the finish arguments; keep scalar and unbound results in the legacy `result` envelope.
 - Treat `EventTool`'s `task_finished` event as completion; every other published event remains observational.
-- Create a configured `Agent::handover` child before marking its parent finished so the Werk never appears empty between them.
+- Run synchronous result hooks before a finish becomes observable as drained, so a hook can file follow-up work safely.
 - Move `Status` only through task-store transitions; reserve `Status::Failed` for system-driven terminal outcomes.
 
 ## Tools and Corrections

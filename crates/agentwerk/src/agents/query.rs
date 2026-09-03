@@ -55,7 +55,6 @@ mod tests {
             ("task.pending = true", Origin::Task),
             ("task.cancelled = false", Origin::Task),
             ("task.assignee = agent-1", Origin::Task),
-            ("task.parent_id = t-1", Origin::Task),
             ("task.input ~ scan", Origin::Task),
             ("task.result ~ clean", Origin::Task),
             ("task.errors ~ timeout", Origin::Task),
@@ -835,7 +834,6 @@ enum Field {
     TaskPending,
     TaskCancelled,
     TaskAssignee,
-    TaskParentId,
     TaskInput,
     TaskResult,
     TaskErrors,
@@ -870,7 +868,6 @@ impl Field {
         ("task.pending", Field::TaskPending),
         ("task.cancelled", Field::TaskCancelled),
         ("task.assignee", Field::TaskAssignee),
-        ("task.parent_id", Field::TaskParentId),
         ("task.input", Field::TaskInput),
         ("task.result", Field::TaskResult),
         ("task.errors", Field::TaskErrors),
@@ -915,7 +912,6 @@ impl Field {
             | Self::TaskPending
             | Self::TaskCancelled
             | Self::TaskAssignee
-            | Self::TaskParentId
             | Self::TaskInput
             | Self::TaskResult
             | Self::TaskErrors
@@ -949,7 +945,6 @@ impl Field {
             self,
             Self::TaskLabel
                 | Self::TaskAssignee
-                | Self::TaskParentId
                 | Self::TaskResult
                 | Self::TaskErrors
                 | Self::TaskStarted
@@ -1027,7 +1022,6 @@ impl Field {
             Self::TaskPending => Some(Cow::Borrowed(bool_text(task.is_pending()))),
             Self::TaskCancelled => Some(Cow::Borrowed(bool_text(task.is_cancelled()))),
             Self::TaskAssignee => task.assignee.as_deref().map(Cow::Borrowed),
-            Self::TaskParentId => task.parent.as_deref().map(Cow::Borrowed),
             Self::TaskInput => Some(as_text(&task.task)),
             Self::TaskResult => task.result.as_ref().map(as_text),
             Self::TaskErrors => serialized_errors(task),

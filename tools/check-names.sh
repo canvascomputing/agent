@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-legacy='TasksTool|TasksArgs|FetchUrlTool|FetchUrlArgs|fetch_url|Agent::task|Agent\.task|TaskMissing|PageMissing|UnknownField|UnknownStatus|InvalidTime|RepeatedField|UnexpectedToken|UnexpectedEnd|set_char_limit'
+legacy='TasksTool|TasksArgs|FetchUrlTool|FetchUrlArgs|fetch_url|Agent::task|Agent\.task|Agent::handover|Agent\.handover|\.handover\(|get_parent|task\.parent_id|HANDOVER_|TaskMissing|PageMissing|UnknownField|UnknownStatus|InvalidTime|RepeatedField|UnexpectedToken|UnexpectedEnd|set_char_limit'
 if rg -n "$legacy" \
     --glob '!target/**' \
     --glob '!.git/**' \

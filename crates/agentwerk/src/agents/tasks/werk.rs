@@ -109,7 +109,7 @@ fn is_recorded_failure(event: &Event) -> bool {
 }
 
 /// An awaited handler and the events it accepts. The filter is read twice: once
-/// to decide whether the event is worth queueing at all, once at handover.
+/// to decide whether the event is worth queueing at all, once at dispatch.
 struct AwaitedHandler {
     matches: fn(&Event) -> bool,
     call: Arc<AsyncHandler>,
@@ -480,7 +480,7 @@ impl Werk {
     /// reply and only calls [`Self::start`] uses `on_event`.
     ///
     /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
-    /// forever on the handover it is running inside.
+    /// forever on the handler it is running inside.
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
@@ -522,7 +522,7 @@ impl Werk {
 
     /// Read every finished task together with its result.
     ///
-    /// The value handed over is the stored, schema-validated result, so a
+    /// The value passed in is the stored, schema-validated result, so a
     /// handler never reaches into the finish tool's input shape. This is one
     /// more entry on the [`Self::on_event`] chain.
     ///
@@ -531,7 +531,7 @@ impl Werk {
     /// let werk = Werk::new();
     /// werk.on_result(|werk, done, result| {
     ///     if result["needs_review"] == true {
-    ///         werk.add_task(Task::labeled("review", done.get_task().clone()).parent(done.get_id()));
+    ///         werk.add_task(Task::labeled("review", done.get_task().clone()));
     ///     }
     /// });
     /// ```
@@ -556,11 +556,11 @@ impl Werk {
     /// [`Self::on_result`] cannot await: it runs on the agent task that just
     /// finished the task, and that task has to carry on. This one hands the
     /// work to whichever `finish` is waiting, on the terms
-    /// [`Self::on_event_async`] sets, and each result waiting to be handed over
+    /// [`Self::on_event_async`] sets, and each result waiting to be handled
     /// holds a copy of its task and every reply in it.
     ///
     /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
-    /// forever on the handover it is running inside.
+    /// forever on the handler it is running inside.
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
@@ -596,12 +596,15 @@ impl Werk {
     ///
     /// ```no_run
     /// # use agentwerk::{Event, Task, Werk};
+    /// # use std::sync::atomic::{AtomicBool, Ordering};
+    /// # use std::sync::Arc;
     /// let werk = Werk::new();
-    /// werk.on_failure(|werk, event, failed| {
-    ///     // Count the attempts yourself, or a task that fails every time
-    ///     // re-queues itself forever.
-    ///     if event.get_name() == Event::TASK_FAILED && failed.get_parent().is_none() {
-    ///         werk.add_task(Task::new(failed.get_task().clone()).parent(failed.get_id()));
+    /// let retried = Arc::new(AtomicBool::new(false));
+    /// werk.on_failure(move |werk, event, failed| {
+    ///     if event.get_name() == Event::TASK_FAILED
+    ///         && !retried.swap(true, Ordering::SeqCst)
+    ///     {
+    ///         werk.add_task(Task::new(failed.get_task().clone()));
     ///     }
     /// });
     /// ```
@@ -618,7 +621,7 @@ impl Werk {
     /// [`Self::on_failure`] on the terms [`Self::on_event_async`] sets.
     ///
     /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
-    /// forever on the handover it is running inside.
+    /// forever on the handler it is running inside.
     pub fn on_failure_async<F, Fut>(&self, handler: F) -> &Self
     where
         F: Fn(Arc<Werk>, Event, Task) -> Fut + Send + Sync + 'static,
@@ -650,7 +653,7 @@ impl Werk {
     /// [`Self::on_task`] on the terms [`Self::on_event_async`] sets.
     ///
     /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
-    /// forever on the handover it is running inside.
+    /// forever on the handler it is running inside.
     pub fn on_task_async<F, Fut>(&self, handler: F) -> &Self
     where
         F: Fn(Arc<Werk>, Event, Task) -> Fut + Send + Sync + 'static,
@@ -695,7 +698,7 @@ impl Werk {
                 if !anyone_wants_it {
                     return;
                 }
-                // Resolved now rather than at handover, so a handler sees the
+                // Resolved now rather than at dispatch, so a handler sees the
                 // task as it was when the event arrived. Only for the kinds a
                 // task-shaped hook accepts: resolving copies every reply,
                 // which on `TextChunkReceived` would cost once per piece.
@@ -713,7 +716,7 @@ impl Werk {
     }
 
     /// Loops because a handler that takes a while lets more events queue up
-    /// behind it. One is taken per lock, so a `finish` dropped mid-handover, by
+    /// behind it. One is taken per lock, so a `finish` dropped mid-handler, by
     /// a timeout or a panic, loses only the event it was on.
     async fn await_handlers(&self) {
         let handlers: Vec<AwaitedHandlerRef> = self
@@ -2817,16 +2820,17 @@ mod tests {
     #[test]
     fn on_failure_files_a_retry_through_the_werk_it_is_handed() {
         let (werk, _tmp) = test_werk();
-        werk.on_failure(|werk, _, failed| {
-            if failed.parent.is_none() {
-                werk.add_task(Task::new(failed.task.clone()).parent(&failed.id));
+        let retried = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        werk.on_failure(move |werk, _, failed| {
+            if !retried.swap(true, Ordering::SeqCst) {
+                werk.add_task(Task::new(failed.task.clone()).label("retry"));
             }
         });
         let id = werk.add_task("work");
 
         werk.set_task_failed(&id).unwrap();
 
-        let retry = werk.find_task(format!("task.parent_id = {id}")).unwrap();
+        let retry = werk.find_task("task.label = retry").unwrap();
         assert_eq!(retry.task, serde_json::json!("work"));
     }
 
@@ -2846,7 +2850,7 @@ mod tests {
     }
 
     #[test]
-    fn on_result_links_a_follow_up_to_the_finished_parent() {
+    fn on_result_files_a_follow_up_from_the_finished_task() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::new("scout").label("scout"));
         let id = werk
@@ -2854,12 +2858,12 @@ mod tests {
             .unwrap();
         werk.set_result(&id, serde_json::json!("lead")).unwrap();
         werk.set_finished_by(&id, "agent").unwrap();
-        werk.on_result(|werk, done, _| {
-            werk.add_task(Task::new("hunt").label("sniper").parent(&done.id));
+        werk.on_result(|werk, _, _| {
+            werk.add_task(Task::new("hunt").label("sniper"));
         });
         emit_event(&werk, &id, "agent", Event::new(Event::TASK_FINISHED));
         let spawned = werk.find_task("task.label = sniper").unwrap();
-        assert_eq!(spawned.parent, Some(id));
+        assert_eq!(spawned.get_task(), "hunt");
     }
 
     #[test]
@@ -3117,8 +3121,8 @@ mod tests {
     #[tokio::test]
     async fn an_async_handler_files_a_follow_up_through_the_werk_it_is_handed() {
         let (werk, _tmp) = test_werk();
-        werk.on_result_async(|werk, done, _| async move {
-            werk.add_task(Task::new("hunt").label("sniper").parent(&done.id));
+        werk.on_result_async(|werk, _, _| async move {
+            werk.add_task(Task::new("hunt").label("sniper"));
         });
         let id = werk.add_task(Task::new("scout").label("scout"));
         werk.set_task_finished(&id, "lead").unwrap();
@@ -3126,7 +3130,7 @@ mod tests {
         werk.finish_all_tasks().await;
 
         let spawned = werk.find_task("task.label = sniper").unwrap();
-        assert_eq!(spawned.parent, Some(id));
+        assert_eq!(spawned.get_task(), "hunt");
     }
 
     #[tokio::test]
@@ -3196,7 +3200,7 @@ mod tests {
         werk.set_result(&id, serde_json::json!("lead")).unwrap();
         werk.set_finished_by(&id, "agent").unwrap();
         // The handler ran inside `set_finished_by`, so the Werk is never
-        // observably empty between the parent finishing and the follow-up.
+        // observably empty between the task finishing and the follow-up.
         assert!(werk.pending(&Query::all()));
     }
 

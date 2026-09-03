@@ -1,43 +1,13 @@
 {
   "type": "object",
-  "description": "Finish the current task and optionally create a follow-up task.",
+  "description": "Finish the current task.",
   "properties": {
     "result": {
-      "description": "Final answer as a native JSON value. Omit only when there is nothing to report. A handover requires a non-null, non-empty value."
-    },
-    "handover": {
-      "type": "object",
-      "description": "Fields for one follow-up task. If follow-up fields are already shown, omitting this object keeps them unchanged. Include it only to supply or change a shown field.",
-      "properties": {
-        "label": {
-          "type": "string",
-          "pattern": "\\S",
-          "description": "Agent label that may claim the follow-up task. A fixed value shown for this field cannot be changed."
-        },
-        "task": {
-          "description": "Follow-up instructions as any JSON value. In string values, `{parent_id}` becomes the current task ID, `{parent_result}` its final result, and `{parent_result_path}` its result-file path."
-        },
-        "schema": {
-          "type": ["object", "boolean"],
-          "description": "Optional JSON Schema that the follow-up result must satisfy."
-        }
-      }
+      "description": "Final answer as a native JSON value. Omit only when there is nothing to report."
     }
   },
-  "allOf": [
-    {
-      "if": { "required": ["handover"] },
-      "then": { "required": ["result"] }
-    }
-  ],
+  "additionalProperties": false,
   "examples": [
-    { "result": "..." },
-    {
-      "result": "...",
-      "handover": {
-        "label": "...",
-        "task": "..."
-      }
-    }
+    { "result": "..." }
   ]
 }

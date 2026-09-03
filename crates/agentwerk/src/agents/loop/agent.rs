@@ -221,7 +221,7 @@ mod tests {
     use crate::agents::r#loop::test_util::*;
     use crate::agents::tasks::{Author, Status, Task, Werk};
     use crate::agents::Knowledge;
-    use crate::tools::{EventTool, FinishTool, TaskTool};
+    use crate::tools::{EventTool, TaskTool};
 
     // Execution lifecycle
 
@@ -427,52 +427,6 @@ mod tests {
             injected.contains("was not accepted"),
             "an unreplaced directive must render its built-in text: {injected:?}",
         );
-    }
-
-    #[tokio::test]
-    async fn finish_waits_through_handover_chain() {
-        // alice hands t-1 off to bob. The handover inserts the child
-        // before finishing the parent, so finish() must not observe an
-        // empty Werk in between and drain the chain early.
-        let results_dir = crate::test_util::TempDir::new().unwrap();
-        let provider = MockProvider::with_results(vec![
-            Ok(write_result_response("alice-done")),
-            Ok(write_result_response("bob-done")),
-        ]);
-        let werk = Werk::new();
-        werk.set_dir(results_dir.path().to_path_buf())
-            .set_policy(Policy {
-                max_request_retries: 0,
-                request_retry_delay: Duration::from_millis(1),
-                ..Default::default()
-            });
-        werk.add_agent(
-            Agent::new()
-                .label("alice")
-                .provider(provider.clone())
-                .model("mock")
-                .role("test")
-                .handover(Task::labeled("bob", "continue"))
-                .tool(FinishTool),
-        );
-        werk.add_agent(
-            Agent::new()
-                .label("bob")
-                .provider(provider.clone())
-                .model("mock")
-                .role("test")
-                .tool(FinishTool),
-        );
-
-        werk.start();
-        werk.add_task(Task::new("a").label("alice"));
-
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
-            .await
-            .expect("finish did not finish within 5s");
-
-        assert_eq!(werk.get_results().len(), 2);
-        assert_eq!(werk.get_task("t-2").unwrap().status, Status::Finished);
     }
 
     #[tokio::test]

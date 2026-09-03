@@ -118,11 +118,9 @@ def test_removed_werk_method_names_are_not_compatibility_aliases(werk):
         assert not hasattr(werk, name)
 
 
-def test_parent_records_the_handover_trail(werk):
-    parent = werk.add_task(aw.Task("survey the corpus"))
-    child = werk.add_task(aw.Task("scan one file", parent=parent))
-
-    assert werk.get_task(child).get_parent() == parent
+def test_removed_parent_keyword_is_rejected():
+    with pytest.raises(TypeError):
+        aw.Task("scan one file", parent="t-1")
 
 
 def test_valid_schema_parses_and_attaches_to_a_task():
@@ -687,16 +685,20 @@ def test_on_failure_receives_the_failed_task(werk):
 
 
 def test_on_failure_files_a_retry_through_the_werk_it_is_handed(werk):
+    retried = False
+
     def retry_once(callback_werk, _, failed):
-        if not failed.get_parent():
-            callback_werk.add_task(aw.Task(failed.get_task(), parent=failed.get_id()))
+        nonlocal retried
+        if not retried:
+            retried = True
+            callback_werk.add_task(aw.Task(failed.get_task(), label="retry"))
 
     werk.on_failure(retry_once)
     id = werk.add_task(aw.Task("scan the corpus"))
 
     werk.set_task_failed(id)
 
-    retry = werk.find_task(lambda task: task.get_parent() == id)
+    retry = werk.find_task("task.label = retry")
     assert retry.get_task() == "scan the corpus"
 
 

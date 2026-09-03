@@ -33,15 +33,13 @@ pub struct PyTask {
 impl PyTask {
     /// Create a task carrying `task`.
     ///
-    /// `label` assigns it to agents, `schema` is what the result must satisfy,
-    /// and `parent` names the task it came from.
+    /// `label` assigns it to agents and `schema` is what the result must satisfy.
     #[new]
-    #[pyo3(signature = (task, *, label=None, schema=None, parent=None))]
+    #[pyo3(signature = (task, *, label=None, schema=None))]
     fn new(
         task: &Bound<'_, PyAny>,
         label: Option<String>,
         schema: Option<PyRef<'_, PySchema>>,
-        parent: Option<String>,
     ) -> PyResult<Self> {
         let mut inner = Task::new(py_to_value(task)?);
         if let Some(label) = label {
@@ -49,9 +47,6 @@ impl PyTask {
         }
         if let Some(schema) = schema {
             inner = inner.schema(schema.inner.clone());
-        }
-        if let Some(parent) = parent {
-            inner = inner.parent(parent);
         }
         Ok(PyTask { inner })
     }
@@ -117,10 +112,6 @@ impl PyTask {
         })
     }
 
-    fn get_parent(&self) -> Option<&str> {
-        self.inner.get_parent()
-    }
-
     /// Name of the agent that created the task.
     fn get_reporter(&self) -> &str {
         self.inner.get_reporter()
@@ -174,7 +165,7 @@ impl PyTask {
 }
 
 impl PyTask {
-    /// Hand over a task the Werk owns, messages included.
+    /// Copy a task the Werk owns, messages included.
     pub fn from_task(task: &Task) -> Self {
         PyTask {
             inner: task.clone(),
@@ -193,9 +184,6 @@ impl PyTask {
         }
         if let Some(schema) = self.inner.get_schema() {
             task = task.schema(schema.clone());
-        }
-        if let Some(parent) = self.inner.get_parent() {
-            task = task.parent(parent);
         }
         task
     }
