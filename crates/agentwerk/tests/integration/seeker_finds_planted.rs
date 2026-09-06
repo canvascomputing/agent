@@ -197,7 +197,7 @@ async fn seeker_pool_finds_planted_indicators(
         werk.add_task(Task::new(threat).label(SEEKER_LABEL));
     }
 
-    werk.finish_all_tasks().await;
+    werk.finish().await;
     common::print_result(&werk);
 
     let calls = calls.lock().unwrap().clone();

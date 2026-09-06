@@ -132,9 +132,9 @@ impl PyWerk {
     /// Every kind reaches it, streamed reply chunks included, and each event
     /// waits in memory until a `finish` drains it.
     ///
-    /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
-    /// NOT call either themselves: that waits forever on the handler the
-    /// handler is running inside.
+    /// Handlers run while `finish`, `finish_task`, or `finish_tasks` is awaited.
+    /// They MUST NOT call these methods themselves: that waits forever on
+    /// the handler they are running inside.
     fn on_event_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner.on_event_async(move |werk, event: Event| {
             let coroutine = Python::attach(|py| {
@@ -165,9 +165,9 @@ impl PyWerk {
     /// that `finish` waits for before it returns, on the terms
     /// `on_event_async` sets.
     ///
-    /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
-    /// NOT call either themselves: that waits forever on the handler the
-    /// handler is running inside.
+    /// Handlers run while `finish`, `finish_task`, or `finish_tasks` is awaited.
+    /// They MUST NOT call these methods themselves: that waits forever on
+    /// the handler they are running inside.
     fn on_result_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
             .on_result_async(move |werk, task: Task, result: Value| {
@@ -199,9 +199,9 @@ impl PyWerk {
     /// `async def` that `finish` waits for before it returns, on the terms
     /// `on_event_async` sets.
     ///
-    /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
-    /// NOT call either themselves: that waits forever on the handler the
-    /// handler is running inside.
+    /// Handlers run while `finish`, `finish_task`, or `finish_tasks` is awaited.
+    /// They MUST NOT call these methods themselves: that waits forever on
+    /// the handler they are running inside.
     fn on_failure_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
             .on_failure_async(move |werk, event: Event, task: Task| {
@@ -276,9 +276,9 @@ impl PyWerk {
     /// `finish` waits for before it returns, on the terms `on_event_async`
     /// sets.
     ///
-    /// Handlers run only while `finish_tasks` or `finish_all_tasks` is awaited, and MUST
-    /// NOT call either themselves: that waits forever on the handler the
-    /// handler is running inside.
+    /// Handlers run while `finish`, `finish_task`, or `finish_tasks` is awaited.
+    /// They MUST NOT call these methods themselves: that waits forever on
+    /// the handler they are running inside.
     fn on_task_async<'py>(slf: PyRef<'py, Self>, handler: Py<PyAny>) -> PyRef<'py, Self> {
         slf.inner
             .on_task_async(move |werk, event: Event, task: Task| {
@@ -358,10 +358,10 @@ impl PyWerk {
 
     /// Wait for every task to be done, then give back every result in
     /// creation order. Awaitable.
-    fn finish_all_tasks<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    fn finish<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = Arc::clone(&self.inner);
         pyo3_async_runtimes::tokio::future_into_py(py, async move {
-            let results = inner.finish_all_tasks().await;
+            let results = inner.finish().await;
             Python::attach(|py| {
                 results
                     .iter()

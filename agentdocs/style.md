@@ -46,7 +46,7 @@ Naming, API, comment, binding, and README conventions for this workspace.
 
 **Name orchestration methods by action and selection scope.**
 
-- Use `finish_task(matches)`, `finish_tasks(matches)`, and `finish_all_tasks()` for waiting and results.
+- Use `finish_task(matches)`, `finish_tasks(matches)`, and `finish()` for waiting and results.
 - Use `cancel_tasks(matches)` and `cancel_all_tasks()` for cancellation; do not add label-specific variants.
 - Use `find_*` for AQL or closure selection and `get_*` for direct access such as `get_task(id)`.
 - Name observers `on_<trigger>` and async twins `on_<trigger>_async`; name immediate mutation `edit_<noun>`.

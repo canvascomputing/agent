@@ -112,7 +112,7 @@ async fn finds_code_pattern_with_special_chars(
          `{TARGET_SIGNATURE}`? Answer with the file's path."
     ));
 
-    werk.finish_all_tasks().await;
+    werk.finish().await;
     common::print_result(&werk);
 
     let recorded = calls.lock().unwrap().clone();

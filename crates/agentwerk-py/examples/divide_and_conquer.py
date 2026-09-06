@@ -145,7 +145,7 @@ async def main(n, partitions, agents):
             )
         )
 
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     partials, failures = {}, []
     for task in werk.get_tasks():

@@ -288,7 +288,7 @@ async fn main() {
                     eprintln!();
                 }
                 eprintln!("{}cancelling…{}", style.dim, style.reset);
-                let winding_down = werk.finish_all_tasks();
+                let winding_down = werk.finish();
                 tokio::pin!(winding_down);
                 tokio::select! {
                     _ = &mut winding_down => {}

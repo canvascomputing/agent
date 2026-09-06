@@ -1,5 +1,7 @@
 """Test the module surface and agent configuration."""
 
+import asyncio
+
 import pytest
 
 import agentwerk as aw
@@ -121,3 +123,61 @@ def test_add_task_uses_the_shared_werk_after_binding(offline_agent, werk):
 
 def test_agent_task_is_not_a_compatibility_alias():
     assert not hasattr(aw.Agent, "task")
+
+
+@pytest.mark.parametrize("method", ["finish_task", "finish_tasks", "finish"])
+async def test_finish_methods_start_execution_and_convert_results(
+    method, scripted_openai, tmp_path
+):
+    expected = {"answer": [42, True, None]}
+    scripted_openai.respond_with_tool("finish", {"result": expected})
+    agent = (
+        aw.Agent().provider(scripted_openai.provider()).model("mock").dir(str(tmp_path))
+    )
+    task = agent.add_task("answer")
+
+    args = () if method == "finish" else (task,)
+    result = await asyncio.wait_for(getattr(agent, method)(*args), timeout=5)
+
+    assert result == (expected if method == "finish_task" else [expected])
+    assert len(scripted_openai.requests) == 1
+
+
+@pytest.mark.parametrize("method", ["finish_task", "finish_tasks", "finish"])
+@pytest.mark.parametrize("missing", ["provider", "model"])
+def test_finish_methods_reject_incomplete_configuration(method, missing):
+    agent = aw.Agent()
+    if missing == "provider":
+        agent.model("mock")
+    else:
+        agent.provider(aw.Anthropic("test-key"))
+    args = () if method == "finish" else ("missing",)
+    with pytest.raises(RuntimeError, match=f"{missing} not set"):
+        getattr(agent, method)(*args)
+
+
+async def test_finish_methods_select_across_the_shared_werk(offline_agent, werk):
+    offline_agent.label("scan")
+    werk.add_agent(offline_agent)
+    scan = offline_agent.add_task(aw.Task("scan", label="scan"))
+    report = werk.add_task(aw.Task("report", label="report"))
+    werk.set_task_finished(report, {"pages": 2})
+    werk.set_task_finished(scan, {"verdict": "clean"})
+
+    assert await offline_agent.finish_task("ORDER BY task.id DESC") == {"pages": 2}
+    assert await offline_agent.finish_tasks(aw.Query("report")) == [{"pages": 2}]
+    assert await offline_agent.finish_tasks(lambda task: task.get_id() == report) == [
+        {"pages": 2}
+    ]
+    assert await offline_agent.finish() == [{"verdict": "clean"}, {"pages": 2}]
+
+
+async def test_finish_methods_return_no_results_for_failed_tasks(offline_agent, werk):
+    werk.add_agent(offline_agent)
+    task = offline_agent.add_task("failed")
+    werk.set_task_failed(task)
+
+    assert await offline_agent.finish_task(task) is None
+    assert await offline_agent.finish_task("missing") is None
+    assert await offline_agent.finish_tasks(task) == []
+    assert await offline_agent.finish() == []

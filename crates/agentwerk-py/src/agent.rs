@@ -11,9 +11,10 @@ use agentwerk::providers::{Model, Provider};
 use agentwerk::{Agent, Knowledge};
 use pyo3::prelude::*;
 
-use crate::convert::{py_to_text, runtime_error};
+use crate::convert::{py_to_text, runtime_error, value_to_py};
 use crate::knowledge::PyKnowledge;
 use crate::providers::{PyModel, PyProvider};
+use crate::query::to_task_matcher;
 use crate::task::to_task;
 use crate::tools::extract_tool;
 use crate::werk::PyWerk;
@@ -233,6 +234,56 @@ impl PyAgent {
         let _guard = pyo3_async_runtimes::tokio::get_runtime().enter();
         Ok(PyWerk {
             inner: self.ready()?.start(),
+        })
+    }
+
+    /// Wait for matching tasks in the bound Werk, starting automatically. Awaitable.
+    fn finish_tasks<'py>(
+        &self,
+        py: Python<'py>,
+        matches: Py<PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.ready()?.clone();
+        let query = to_task_matcher(py, &matches)?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let results = inner.finish_tasks(query).await;
+            Python::attach(|py| {
+                results
+                    .iter()
+                    .map(|value| Ok(value_to_py(py, value)?.unbind()))
+                    .collect::<PyResult<Vec<_>>>()
+            })
+        })
+    }
+
+    /// Wait for every task to be done, then give back every result in
+    /// creation order. Awaitable.
+    fn finish<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.ready()?.clone();
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let results = inner.finish().await;
+            Python::attach(|py| {
+                results
+                    .iter()
+                    .map(|value| Ok(value_to_py(py, value)?.unbind()))
+                    .collect::<PyResult<Vec<_>>>()
+            })
+        })
+    }
+
+    /// Wait for the matching tasks to be done, then give back the first result
+    /// in query order. `None` means no matching task finished with a result.
+    /// Awaitable.
+    fn finish_task<'py>(&self, py: Python<'py>, matches: Py<PyAny>) -> PyResult<Bound<'py, PyAny>> {
+        let inner = self.ready()?.clone();
+        let query = to_task_matcher(py, &matches)?;
+        pyo3_async_runtimes::tokio::future_into_py(py, async move {
+            let result = inner.finish_task(query).await;
+            Python::attach(|py| {
+                result
+                    .map(|value| Ok(value_to_py(py, &value)?.unbind()))
+                    .transpose()
+            })
         })
     }
 }

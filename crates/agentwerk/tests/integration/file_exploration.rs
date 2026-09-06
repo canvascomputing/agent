@@ -30,7 +30,7 @@ async fn file_tools_explore_the_repository() -> std::result::Result<(), Box<dyn 
     werk.add_agent(agent);
     werk.add_task("Find all Rust source files and describe what this project does.");
 
-    werk.finish_all_tasks().await;
+    werk.finish().await;
     common::print_result(&werk);
 
     assert!(!werk

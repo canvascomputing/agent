@@ -311,7 +311,7 @@ async def main(pruefer, meister, monteur):
         )
 
     pages = asyncio.create_task(watch_pages(book, feed, started_at))
-    await werk.finish_all_tasks()
+    await werk.finish()
     pages.cancel()
 
     stats = {

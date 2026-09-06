@@ -42,7 +42,7 @@ async def run_scripted_agent(scripted_openai, tmp_path, tool):
         .add_agent(agent)
     )
     werk.add_task("Run the tool, then finish.")
-    results = await werk.finish_all_tasks()
+    results = await werk.finish()
     return werk, results
 
 

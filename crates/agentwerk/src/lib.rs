@@ -19,9 +19,8 @@
 //!     .tool(ReadFileTool)
 //!     .tool(GrepTool);
 //!
-//! agent.add_task("Find every `pub trait` defined under src/ and explain each in one sentence.");
-//! let werk = agent.start();
-//! let result = werk.finish_task("ORDER BY task.created DESC").await.unwrap();
+//! let task = agent.add_task("Find every `pub trait` defined under src/ and explain each in one sentence.");
+//! let result = agent.finish_task(task).await.unwrap();
 //!
 //! println!("{}", result.as_str().unwrap_or_default());
 //! # }
@@ -53,7 +52,7 @@
 //!     werk.add_task(Task::labeled("research", format!("Summarize {url}")));
 //! }
 //!
-//! werk.finish_all_tasks().await;
+//! werk.finish().await;
 //!
 //! for task in werk.get_tasks() {
 //!     if let Some(result) = task.get_result() {

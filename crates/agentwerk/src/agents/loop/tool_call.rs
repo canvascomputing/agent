@@ -437,7 +437,7 @@ mod tests {
         );
         werk.add_task(Task::new("go").schema(schema_for_partial_sum()));
 
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         let second = &provider.received()[1];
         let answered = second
@@ -602,7 +602,7 @@ mod tests {
                 .tool(serial),
         );
         werk.add_task("go");
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         assert_eq!(completed.load(Ordering::SeqCst), 3);
         assert!(serial_ran.load(Ordering::SeqCst));
@@ -661,7 +661,7 @@ mod tests {
                 .tool(steady),
         );
         werk.add_task("go");
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         let events = events.lock().unwrap();
         assert!(events.iter().any(|event| {
@@ -737,7 +737,7 @@ mod tests {
         );
         werk.add_task("go");
 
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         let events = events.lock().unwrap();
         assert!(events.iter().any(|event| {
@@ -905,7 +905,7 @@ mod tests {
         );
         werk.add_task("go");
 
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         let events = collected.lock().unwrap().clone();
         let sequence: Vec<&str> = events
@@ -966,7 +966,7 @@ mod tests {
                 .tool(boom),
         );
         werk.add_task("go");
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         assert_eq!(
             werk.get_tasks().into_iter().next().unwrap().status,
@@ -1037,7 +1037,7 @@ mod tests {
                 .tool(boom),
         );
         werk.add_task("go");
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         assert_eq!(*stored.lock().unwrap(), Some(true));
     }
@@ -1084,7 +1084,7 @@ mod tests {
                 .tool(ping),
         );
         werk.add_task("go");
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         assert_eq!(
             werk.get_tasks().into_iter().next().unwrap().status,
@@ -1148,7 +1148,7 @@ mod tests {
             tool_unblocked.notify_one();
         };
 
-        tokio::join!(werk.finish_all_tasks(), unblock);
+        tokio::join!(werk.finish(), unblock);
         assert_eq!(
             werk.get_tasks().into_iter().next().unwrap().status,
             Status::Finished
@@ -1208,7 +1208,7 @@ mod tests {
         );
         werk.add_task("go");
 
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
         let events = collected.lock().unwrap().clone();
         let task = werk
             .get_tasks()
@@ -1328,7 +1328,7 @@ mod tests {
         );
         werk.add_task("go");
 
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
         let task = werk
             .get_tasks()
             .into_iter()

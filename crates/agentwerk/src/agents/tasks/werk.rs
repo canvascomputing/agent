@@ -243,7 +243,7 @@ impl Run {
 ///     );
 /// }
 /// werk.add_task(Task::labeled("research", "Summarize https://canvascomputing.org"));
-/// werk.finish_all_tasks().await;
+/// werk.finish().await;
 /// # }
 /// ```
 ///
@@ -259,7 +259,7 @@ impl Run {
 ///
 /// # fn run() -> Result<(), Box<dyn std::error::Error>> {
 /// let werk = Werk::load(".agentwerk")?;
-/// // Re-register the agents, then call .start() or .finish_all_tasks().await.
+/// // Re-register the agents, then call .start() or .finish().await.
 /// # let _ = werk;
 /// # Ok(())
 /// # }
@@ -479,8 +479,8 @@ impl Werk {
     /// waits in memory until a `finish` drains it. A host that streams a long
     /// reply and only calls [`Self::start`] uses `on_event`.
     ///
-    /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
-    /// forever on the handler it is running inside.
+    /// Your handler MUST NOT call [`Self::finish`], [`Self::finish_task`], or
+    /// [`Self::finish_tasks`], or it waits forever on the handler it is running inside.
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
@@ -489,7 +489,7 @@ impl Werk {
     /// werk.on_event_async(|_, event| async move {
     ///     println!("{}", event.get_name());
     /// });
-    /// werk.finish_all_tasks().await;
+    /// werk.finish().await;
     /// # }
     /// ```
     pub fn on_event_async<F, Fut>(&self, handler: F) -> &Self
@@ -559,8 +559,8 @@ impl Werk {
     /// [`Self::on_event_async`] sets, and each result waiting to be handled
     /// holds a copy of its task and every reply in it.
     ///
-    /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
-    /// forever on the handler it is running inside.
+    /// Your handler MUST NOT call [`Self::finish`], [`Self::finish_task`], or
+    /// [`Self::finish_tasks`], or it waits forever on the handler it is running inside.
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
@@ -569,7 +569,7 @@ impl Werk {
     /// werk.on_result_async(|_, task, result| async move {
     ///     println!("{} produced {result}", task.get_id());
     /// });
-    /// werk.finish_all_tasks().await;
+    /// werk.finish().await;
     /// # }
     /// ```
     pub fn on_result_async<F, Fut>(&self, handler: F) -> &Self
@@ -620,8 +620,8 @@ impl Werk {
     ///
     /// [`Self::on_failure`] on the terms [`Self::on_event_async`] sets.
     ///
-    /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
-    /// forever on the handler it is running inside.
+    /// Your handler MUST NOT call [`Self::finish`], [`Self::finish_task`], or
+    /// [`Self::finish_tasks`], or it waits forever on the handler it is running inside.
     pub fn on_failure_async<F, Fut>(&self, handler: F) -> &Self
     where
         F: Fn(Arc<Werk>, Event, Task) -> Fut + Send + Sync + 'static,
@@ -652,8 +652,8 @@ impl Werk {
     ///
     /// [`Self::on_task`] on the terms [`Self::on_event_async`] sets.
     ///
-    /// Your handler MUST NOT call `finish` or [`Self::finish_all_tasks`], or it waits
-    /// forever on the handler it is running inside.
+    /// Your handler MUST NOT call [`Self::finish`], [`Self::finish_task`], or
+    /// [`Self::finish_tasks`], or it waits forever on the handler it is running inside.
     pub fn on_task_async<F, Fut>(&self, handler: F) -> &Self
     where
         F: Fn(Arc<Werk>, Event, Task) -> Fut + Send + Sync + 'static,
@@ -1123,7 +1123,7 @@ impl Werk {
 
     /// Take every task off the Werk, which ends the run.
     ///
-    /// [`Self::finish_all_tasks`] then reports `FinishReason::Cancelled`. Like
+    /// [`Self::finish`] then reports `FinishReason::Cancelled`. Like
     /// [`Self::cancel_tasks`], nothing waits, so a ctrl-c handler can call it.
     pub fn cancel_all_tasks(&self) -> &Self {
         self.cancel_tasks(Query::all().task())
@@ -1320,7 +1320,7 @@ impl Werk {
     /// query order, or creation order when the query names none.
     ///
     /// Name task state, recorded events, or both to select what to wait for;
-    /// [`Self::finish_all_tasks`] waits for the whole run. The wait ends once no
+    /// [`Self::finish`] waits for the whole run. The wait ends once no
     /// matching task has work left for an agent, which covers one that
     /// finished, failed, was cancelled, or is paused awaiting your reply.
     ///
@@ -1329,9 +1329,10 @@ impl Werk {
     /// with [`Self::get_results`]. Read why the wait ended with
     /// [`Self::get_finish_reason`].
     ///
-    /// Execution begins here when the Werk has never run, and otherwise this
-    /// waits on what is already under way. Once a run has ended it returns at
-    /// once: only [`Self::start`] starts another. Your filter MUST NOT call
+    /// Execution begins automatically on the first wait. Later waits can start
+    /// another run once the previous wait released it and claimable work remains.
+    /// Otherwise this waits on the current run or returns its results. Use
+    /// [`Self::start`] to explicitly resume cancelled work. Your filter MUST NOT call
     /// another `Werk` method that reads the task store, or the call
     /// deadlocks.
     ///
@@ -1416,12 +1417,12 @@ impl Werk {
     /// # use agentwerk::Werk;
     /// # async fn run() {
     /// let werk = Werk::new();
-    /// for finding in werk.finish_all_tasks().await {
+    /// for finding in werk.finish().await {
     ///     println!("{finding}");
     /// }
     /// # }
     /// ```
-    pub async fn finish_all_tasks(&self) -> Vec<serde_json::Value> {
+    pub async fn finish(&self) -> Vec<serde_json::Value> {
         self.finish_tasks(Query::all().task()).await
     }
 
@@ -2549,7 +2550,7 @@ mod tests {
         assert!(werk.find_tasks("task.cancelled = true").is_empty());
         assert_eq!(werk.find_tasks("task.pending = true").len(), 2);
         werk.cancel_all_tasks();
-        werk.finish_all_tasks().await;
+        werk.finish().await;
     }
 
     #[tokio::test]
@@ -2558,7 +2559,7 @@ mod tests {
         werk.add_task(Task::new("work").label("research"));
         werk.start();
         werk.cancel_tasks("task.pending = true AND task.label = research");
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         assert_eq!(werk.find_events("event.name = run_started").len(), 1);
         werk.finish_tasks("task.label = research").await;
@@ -2567,7 +2568,7 @@ mod tests {
         werk.start();
         assert_eq!(werk.find_events("event.name = run_started").len(), 2);
         werk.cancel_all_tasks();
-        werk.finish_all_tasks().await;
+        werk.finish().await;
     }
 
     #[test]
@@ -2914,7 +2915,7 @@ mod tests {
         let id = werk.add_task("scan the corpus");
         werk.set_task_finished(&id, "clean").unwrap();
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -2936,7 +2937,7 @@ mod tests {
         let id = werk.add_task("scan the corpus");
         werk.set_task_finished(&id, "clean").unwrap();
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         // Two entries, not four: a second registration does not queue twice.
         assert_eq!(*seen.lock().unwrap(), vec!["first", "second"]);
@@ -2964,7 +2965,7 @@ mod tests {
         let id = werk.add_task("scan the corpus");
         werk.set_task_finished(&id, "clean").unwrap();
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         // Two entries, not four: neither thread installed a second hook.
         assert_eq!(seen.lock().unwrap().len(), 2);
@@ -2991,9 +2992,9 @@ mod tests {
         werk.set_task_finished(&first, "clean").unwrap();
         werk.set_task_finished(&second, "clean").unwrap();
 
-        let cancelled = tokio::time::timeout(Duration::from_millis(50), werk.finish_all_tasks());
+        let cancelled = tokio::time::timeout(Duration::from_millis(50), werk.finish());
         assert!(cancelled.await.is_err());
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         assert_eq!(*seen.lock().unwrap(), vec![first, second]);
     }
@@ -3017,7 +3018,7 @@ mod tests {
         werk.set_task_finished(&first, "clean").unwrap();
         werk.set_task_finished(&second, "clean").unwrap();
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         assert_eq!(
             *seen.lock().unwrap(),
@@ -3051,7 +3052,7 @@ mod tests {
         let id = werk.add_task("scan the corpus");
         werk.set_task_finished(&id, 1).unwrap();
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         // One entry each: the two kinds share one queueing hook.
         assert_eq!(
@@ -3071,7 +3072,7 @@ mod tests {
         });
         emit_event(&werk, "ID", "agent", Event::new(Event::TURN_STARTED));
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         assert!(seen.lock().unwrap().contains(&"turn_started".to_string()));
     }
@@ -3091,7 +3092,7 @@ mod tests {
         });
         werk.emit_event(Event::new("document_indexed"));
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         assert_eq!(*seen.lock().unwrap(), vec!["document_indexed"]);
     }
@@ -3113,7 +3114,7 @@ mod tests {
         let id = werk.add_task("scan the corpus");
         werk.set_task_failed(&id).unwrap();
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         assert_eq!(*seen.lock().unwrap(), vec![("task_failed".to_string(), id)]);
     }
@@ -3127,7 +3128,7 @@ mod tests {
         let id = werk.add_task(Task::new("scout").label("scout"));
         werk.set_task_finished(&id, "lead").unwrap();
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         let spawned = werk.find_task("task.label = sniper").unwrap();
         assert_eq!(spawned.get_task(), "hunt");
@@ -3147,7 +3148,7 @@ mod tests {
         werk.set_task_finished(&id, "clean").unwrap();
         assert!(seen.lock().unwrap().is_empty());
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
         assert_eq!(*seen.lock().unwrap(), vec![id]);
     }
 
@@ -3163,7 +3164,7 @@ mod tests {
         let id = werk.add_task("scan the corpus");
         werk.set_task_failed(&id).unwrap();
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         assert!(seen.lock().unwrap().is_empty());
     }
@@ -3306,7 +3307,7 @@ mod tests {
     async fn run_finished_reports_drained_on_empty_werk() {
         let (werk, _tmp) = test_werk();
         let reasons = collect_finish_reasons(&werk);
-        werk.finish_all_tasks().await;
+        werk.finish().await;
         assert_eq!(*reasons.lock().unwrap(), vec![FinishReason::Drained]);
     }
 
@@ -3315,7 +3316,7 @@ mod tests {
         let (werk, _tmp) = test_werk();
         werk.start();
         assert_eq!(werk.get_finish_reason(), None);
-        werk.finish_all_tasks().await;
+        werk.finish().await;
         assert_eq!(werk.get_finish_reason(), Some(FinishReason::Drained));
     }
 
@@ -3324,7 +3325,7 @@ mod tests {
         let (werk, _tmp) = test_werk();
         werk.start();
         werk.cancel_all_tasks();
-        werk.finish_all_tasks().await;
+        werk.finish().await;
         assert_eq!(werk.get_finish_reason(), Some(FinishReason::Cancelled));
         werk.start();
         assert_eq!(werk.get_finish_reason(), None);
@@ -3333,7 +3334,7 @@ mod tests {
     #[tokio::test]
     async fn a_clean_drain_is_not_reported_as_cancelled() {
         let (werk, _tmp) = test_werk();
-        werk.finish_all_tasks().await;
+        werk.finish().await;
         assert_eq!(werk.get_finish_reason(), Some(FinishReason::Drained));
     }
 
@@ -3360,7 +3361,7 @@ mod tests {
         attach_done_result(&werk, "t-2", "reported");
 
         assert_eq!(
-            werk.finish_all_tasks().await,
+            werk.finish().await,
             vec![serde_json::json!("scanned"), serde_json::json!("reported")]
         );
     }
@@ -3393,7 +3394,7 @@ mod tests {
         let reasons = collect_finish_reasons(&werk);
         werk.start();
         werk.cancel_all_tasks();
-        werk.finish_all_tasks().await;
+        werk.finish().await;
         assert_eq!(*reasons.lock().unwrap(), vec![FinishReason::Cancelled]);
         assert_eq!(werk.get_finish_reason(), Some(FinishReason::Cancelled));
     }
@@ -3406,7 +3407,7 @@ mod tests {
             max_turns: Some(0),
             ..Default::default()
         });
-        werk.finish_all_tasks().await;
+        werk.finish().await;
         assert_eq!(
             *reasons.lock().unwrap(),
             vec![FinishReason::PolicyViolated(crate::PolicyViolation::Turns)],
@@ -3417,9 +3418,9 @@ mod tests {
     async fn run_finished_is_emitted_again_after_a_restart() {
         let (werk, _tmp) = test_werk();
         let reasons = collect_finish_reasons(&werk);
-        werk.finish_all_tasks().await;
+        werk.finish().await;
         werk.start();
-        werk.finish_all_tasks().await;
+        werk.finish().await;
         assert_eq!(
             *reasons.lock().unwrap(),
             vec![FinishReason::Drained, FinishReason::Drained],
@@ -3436,7 +3437,7 @@ mod tests {
                 sink.lock().unwrap().push(e.get_name().to_string());
             }
         });
-        werk.finish_all_tasks().await;
+        werk.finish().await;
         let entries = log.lock().unwrap();
         assert_eq!(entries.len(), 2, "expected RunStarted then RunFinished");
         assert_eq!(entries[0], Event::RUN_STARTED);

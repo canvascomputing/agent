@@ -10,6 +10,7 @@ use crate::tools::{EventTool, FinishTool, KnowledgeTool, Tool};
 
 use super::knowledge::Knowledge;
 use super::policy::Policy;
+use super::query::Matcher;
 use super::stats::Stats;
 use super::tasks::{Task, Werk};
 use crate::prompts::directives::DirectiveStore;
@@ -120,7 +121,7 @@ impl Default for Agent {
 
 impl Agent {
     /// Create an agent, with a Werk of its own so
-    /// `.add_task(...)` and `.start()` work without one being set up.
+    /// `.add_task(...)`, `.start()`, and `.finish()` work without one being set up.
     /// `Werk::add_agent(...)` later moves those tasks into the shared Werk.
     ///
     /// Give it a provider and a model before it starts work.
@@ -482,18 +483,59 @@ impl Agent {
     /// # use agentwerk::Agent;
     /// # async fn run(agent: Agent) {
     /// let werk = agent.start();
-    /// werk.finish_all_tasks().await;
+    /// werk.finish().await;
     /// # }
     /// ```
     pub fn start(&self) -> Arc<Werk> {
+        let werk = self.register();
+        werk.start();
+        werk
+    }
+
+    /// Wait for matching tasks and get the first result in query order.
+    ///
+    /// Registers this agent if needed and lets [`Werk::finish_task`] start
+    /// execution automatically. On a shared Werk, the query can select any
+    /// task. `None` means no matching task finished with a result.
+    /// Configure the agent before its first start or finish call.
+    ///
+    /// ```no_run
+    /// # use agentwerk::Agent;
+    /// # async fn run(agent: Agent) {
+    /// let task = agent.add_task("Summarize the changelog.");
+    /// let result = agent.finish_task(task).await;
+    /// # }
+    /// ```
+    pub async fn finish_task(&self, matches: impl Matcher<Task>) -> Option<serde_json::Value> {
+        self.register().finish_task(matches).await
+    }
+
+    /// Wait for matching tasks and get their results in query order.
+    ///
+    /// Registers this agent if needed and delegates to [`Werk::finish_tasks`],
+    /// including automatic startup and selection across the shared Werk.
+    /// Configure the agent before its first start or finish call.
+    pub async fn finish_tasks(&self, matches: impl Matcher<Task>) -> Vec<serde_json::Value> {
+        self.register().finish_tasks(matches).await
+    }
+
+    /// Wait for every task in the bound Werk and get results in creation order.
+    ///
+    /// Registers this agent if needed and delegates to [`Werk::finish`],
+    /// including automatic startup. This waits for the entire shared Werk.
+    /// Configure the agent before its first start or finish call.
+    pub async fn finish(&self) -> Vec<serde_json::Value> {
+        self.register().finish().await
+    }
+
+    fn register(&self) -> Arc<Werk> {
         let werk = self
             .werk
             .upgrade()
-            .expect("Agent::start requires a bound Werk");
+            .expect("Agent execution requires a bound Werk");
         if !werk.has_agent(self.get_id()) {
             werk.add_agent(self.clone());
         }
-        werk.start();
         werk
     }
 }
@@ -1066,5 +1108,171 @@ mod tests {
         let mut agent = callable(Agent::new().knowledge(&store));
         werk.bind_agent(&mut agent);
         assert!(Arc::ptr_eq(&store, &agent.knowledge));
+    }
+
+    #[tokio::test]
+    async fn finish_task_starts_and_restarts_for_new_tasks_without_registering_twice() {
+        use crate::agents::r#loop::test_util::{write_result_response, MockProvider};
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let agent = Agent::new()
+            .provider(MockProvider::with_results(vec![
+                Ok(write_result_response("first")),
+                Ok(write_result_response("second")),
+            ]))
+            .model("test");
+        let werk = agent.werk.upgrade().unwrap();
+        werk.set_dir(dir.path().to_path_buf());
+
+        for answer in ["first", "second"] {
+            let task = agent.add_task(answer);
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(5), agent.finish_task(task))
+                    .await
+                    .unwrap();
+            assert_eq!(result, Some(serde_json::json!(answer)));
+        }
+        assert_eq!(werk.clone_agents().len(), 1);
+        assert_eq!(werk.find_events("event.name = run_started").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn finish_tasks_starts_execution_and_returns_selected_results_in_query_order() {
+        use crate::agents::r#loop::test_util::{write_result_response, MockProvider};
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let agent = Agent::new()
+            .provider(MockProvider::with_results(vec![
+                Ok(write_result_response("first")),
+                Ok(write_result_response("second")),
+                Ok(write_result_response("third")),
+            ]))
+            .model("test");
+        let werk = agent.werk.upgrade().unwrap();
+        werk.set_dir(dir.path().to_path_buf());
+        let first = agent.add_task("first");
+        agent.add_task("second");
+        agent.add_task("third");
+
+        let results = agent
+            .finish_tasks(format!("task.id != {first} ORDER BY task.id DESC"))
+            .await;
+        assert_eq!(
+            results,
+            vec![serde_json::json!("third"), serde_json::json!("second")]
+        );
+        assert_eq!(
+            agent.finish_task("ORDER BY task.id DESC").await,
+            Some(serde_json::json!("third"))
+        );
+    }
+
+    #[tokio::test]
+    async fn finish_starts_and_waits_for_every_agent_in_the_shared_werk() {
+        use crate::agents::r#loop::test_util::{write_result_response, MockProvider};
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let werk = Werk::new();
+        werk.set_dir(dir.path().to_path_buf());
+        let agent = Agent::new()
+            .label("scan")
+            .provider(MockProvider::with_results(vec![Ok(write_result_response(
+                "clean",
+            ))]))
+            .model("test");
+        werk.add_agent(agent.clone()).add_agent(
+            Agent::new()
+                .label("report")
+                .provider(MockProvider::with_results(vec![Ok(write_result_response(
+                    "report",
+                ))]))
+                .model("test"),
+        );
+        agent.add_task(Task::labeled("scan", "scan"));
+        let report = werk.add_task(Task::labeled("report", "report"));
+
+        assert_eq!(
+            agent.finish().await,
+            vec![serde_json::json!("clean"), serde_json::json!("report")]
+        );
+        assert_eq!(
+            agent.finish_task(report).await,
+            Some(serde_json::json!("report"))
+        );
+        assert_eq!(
+            agent.finish_tasks("report").await,
+            vec![serde_json::json!("report")]
+        );
+        assert_eq!(werk.clone_agents().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn finish_methods_return_no_results_for_empty_or_failed_tasks() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let agent = callable(Agent::new());
+        let werk = agent.werk.upgrade().unwrap();
+        werk.set_dir(dir.path().to_path_buf());
+        assert_eq!(agent.finish_task("missing").await, None);
+        assert!(agent.finish_tasks("missing").await.is_empty());
+        assert!(agent.finish().await.is_empty());
+
+        let task = agent.add_task("the mock provider has no responses");
+        assert_eq!(agent.finish_task(task.clone()).await, None);
+        assert!(werk.get_task(&task).unwrap().is_failed());
+        assert!(agent.finish_tasks(task).await.is_empty());
+        assert!(agent.finish().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn finish_methods_do_not_resume_cancelled_work() {
+        use crate::agents::r#loop::test_util::MockProvider;
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![]);
+        let agent = Agent::new().provider(provider.clone()).model("test");
+        let werk = agent.werk.upgrade().unwrap();
+        werk.set_dir(dir.path().to_path_buf());
+        let task = agent.add_task("cancel before the provider is called");
+        agent.start().cancel_all_tasks();
+
+        assert_eq!(agent.finish_task(task.clone()).await, None);
+        assert!(agent.finish_tasks(task.clone()).await.is_empty());
+        assert!(agent.finish().await.is_empty());
+        assert!(werk.get_task(&task).unwrap().is_cancelled());
+        assert_eq!(provider.requests(), 0);
+        assert_eq!(werk.find_events("event.name = run_started").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn start_keeps_running_across_empty_queues_until_finish_is_awaited() {
+        use crate::agents::r#loop::test_util::{write_result_response, MockProvider};
+        use std::time::Duration;
+
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let agent = Agent::new()
+            .provider(MockProvider::with_results(vec![
+                Ok(write_result_response("first")),
+                Ok(write_result_response("second")),
+            ]))
+            .model("test");
+        let werk = agent.werk.upgrade().unwrap();
+        werk.set_dir(dir.path().to_path_buf());
+        agent.start();
+
+        for answer in ["first", "second"] {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            assert!(werk.find_events("event.name = run_finished").is_empty());
+            let task = agent.add_task(answer);
+            tokio::time::timeout(Duration::from_secs(5), async {
+                while !werk.get_task(&task).unwrap().is_finished() {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("the background run did not process the new task");
+        }
+
+        assert_eq!(
+            agent.finish().await,
+            vec![serde_json::json!("first"), serde_json::json!("second")]
+        );
+        assert_eq!(werk.find_events("event.name = run_started").len(), 1);
+        assert_eq!(werk.find_events("event.name = run_finished").len(), 1);
     }
 }

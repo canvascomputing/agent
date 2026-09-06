@@ -101,7 +101,6 @@ def test_removed_werk_method_names_are_not_compatibility_aliases(werk):
         "set_failed",
         "cancel",
         "cancel_all",
-        "finish",
         "finish_result",
         "finish_results",
         "finish_all",
@@ -406,7 +405,7 @@ async def test_start_clears_cancellation_flags_and_filters(werk):
     assert werk.find_tasks("task.cancelled = true") == []
     assert len(werk.find_tasks("task.pending = true")) == 2
     werk.cancel_all_tasks()
-    await werk.finish_all_tasks()
+    await werk.finish()
 
 
 def test_task_json_does_not_persist_cancellation(werk, tmp_path):
@@ -802,7 +801,7 @@ async def test_run_finished_announces_why_execution_ended(werk):
         if event.get_name() == aw.Event.RUN_FINISHED
         else None
     )
-    await werk.finish_all_tasks()
+    await werk.finish()
     assert werk.get_finish_reason() == "drained"
     assert reasons == ["drained"]
 
@@ -818,7 +817,7 @@ async def test_on_result_async_awaits_the_handler_before_finish_all_returns(werk
     id = werk.add_task("scan the corpus")
     werk.set_task_finished(id, {"verdict": "clean"})
 
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     assert seen == [(id, {"verdict": "clean"})]
 
@@ -838,7 +837,7 @@ async def test_on_result_async_finishes_one_handler_before_starting_the_next(wer
     werk.set_task_finished(first, "clean")
     werk.set_task_finished(second, "clean")
 
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     assert seen == [f"start {first}", f"end {first}", f"start {second}", f"end {second}"]
 
@@ -861,7 +860,7 @@ async def test_on_result_async_writes_every_result_to_a_database(werk, tmp_path)
     werk.set_task_finished(first, {"verdict": "clean"})
     werk.set_task_finished(second, {"verdict": "malicious"})
 
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     # `finish_all` waited, so no write is still in flight here.
     rows = database.execute("SELECT task, verdict FROM verdicts").fetchall()
@@ -879,7 +878,7 @@ async def test_on_task_async_awaits_the_handler_before_finish_all_returns(werk):
     id = werk.add_task("scan the corpus")
     werk.set_task_finished(id, "clean")
 
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     assert seen == [("task_finished", id)]
 
@@ -895,7 +894,7 @@ async def test_on_failure_async_awaits_the_handler_before_finish_all_returns(wer
     id = werk.add_task("scan the corpus")
     werk.set_task_failed(id)
 
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     assert seen == [("task_failed", id)]
 
@@ -911,7 +910,7 @@ async def test_on_event_async_sees_the_kinds_no_task_hook_accepts(werk):
     id = werk.add_task("scan the corpus")
     werk.set_task_finished(id, "clean")
 
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     assert "task_created" in seen
 
@@ -927,7 +926,7 @@ async def test_on_event_async_receives_named_events(werk):
     werk.on_event_async(note)
     werk.emit_event(aw.Event("document_indexed"))
 
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     assert seen == ["document_indexed"]
 
@@ -942,7 +941,7 @@ async def test_on_result_async_runs_the_handler_on_the_callers_event_loop(werk):
     id = werk.add_task("scan the corpus")
     werk.set_task_finished(id, "clean")
 
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     # Running on the caller's loop lets the caller serialize its own database work with the handler.
     assert loops == [asyncio.get_running_loop()]
@@ -961,7 +960,7 @@ async def test_finish_all_hands_back_the_results_of_every_pool(werk):
     werk.set_task_finished(scan, {"verdict": "clean"})
     werk.set_task_finished(report, {"pages": 2})
 
-    assert await werk.finish_all_tasks() == [{"verdict": "clean"}, {"pages": 2}]
+    assert await werk.finish() == [{"verdict": "clean"}, {"pages": 2}]
 
 
 async def test_finish_task_hands_back_the_first_result_in_query_order(werk):
@@ -982,7 +981,7 @@ async def test_a_cancelled_run_reports_its_reason(werk):
     werk.start()
     werk.add_task("work")
     werk.cancel_all_tasks()
-    await werk.finish_all_tasks()
+    await werk.finish()
     assert werk.get_finish_reason() == "cancelled"
 
 
