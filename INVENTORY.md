@@ -956,9 +956,13 @@ Not bound, like the rest of `codegrep`.
 | Rust | `Event.BUILTIN_NAMES: string[]` | crate |
 | Rust | `take(object: json, field: string): any` | private |
 | Rust | `take_or(object: json, field: string, default: any): any` | private |
-| Rust | `data_str(event: Event, key: string): string?` | private |
-| Rust | `data_u64(event: Event, key: string): number?` | private |
-| Rust | `compact_input(input: json): string` | private |
+| Rust | `default_log_line(event: Event, color: bool): string?` | private |
+| Rust | `default_log_message(event: Event): (char, string)?` | private |
+| Rust | `log_tool_action(name: string, input: json): string?` | private |
+| Rust | `log_field(data: json, key: string, default: string): string` | private |
+| Rust | `log_count(data: json, key: string): string` | private |
+| Rust | `log_error_detail(data: json): string` | private |
+| Rust | `compact_log_text(text: string, max: number): string` | private |
 
 ## `crates/agentwerk/src/lib.rs`
 
