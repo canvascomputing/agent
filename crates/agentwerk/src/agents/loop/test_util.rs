@@ -332,7 +332,7 @@ pub async fn run_one(
         werk.add_task("go");
     }
 
-    let _ = werk.finish_all_tasks().await;
+    let _ = werk.finish().await;
     let events = collected.lock().unwrap().clone();
     let task = werk
         .get_tasks()
@@ -374,7 +374,7 @@ pub async fn run_with_context_window(
     );
     werk.add_task(task);
 
-    let _ = werk.finish_all_tasks().await;
+    let _ = werk.finish().await;
     let events = collected.lock().unwrap().clone();
     let task = werk
         .get_tasks()
@@ -420,7 +420,7 @@ pub async fn run_compaction(
     let schema = Schema::new(serde_json::json!({"type": "string"})).unwrap();
     werk.add_task(Task::new("go").schema(schema));
 
-    let _ = werk.finish_all_tasks().await;
+    let _ = werk.finish().await;
     let events = collected.lock().unwrap().clone();
     let task = werk
         .get_tasks()

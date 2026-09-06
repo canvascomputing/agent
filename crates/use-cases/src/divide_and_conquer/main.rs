@@ -72,7 +72,7 @@ async fn main() {
         );
     }
 
-    werk.finish_all_tasks().await;
+    werk.finish().await;
 
     aggregate_and_report(&werk, &partitions, args.n, &style);
 }

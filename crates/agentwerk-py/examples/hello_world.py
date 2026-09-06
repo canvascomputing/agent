@@ -21,8 +21,7 @@ async def main(task):
 
     agent.add_task(task)
 
-    werk = agent.start()
-    results = await werk.finish_all_tasks()
+    results = await agent.finish()
 
     if not results:
         print("the agent finished no task", file=sys.stderr)

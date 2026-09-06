@@ -41,7 +41,7 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
          exactly the line `token={token}`."
     ));
 
-    werk.finish_all_tasks().await;
+    werk.finish().await;
     common::print_result(&werk);
 
     assert!(

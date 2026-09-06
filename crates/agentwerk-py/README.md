@@ -73,7 +73,7 @@ async def main():
         "Find every `pub trait` defined under src/ and explain each in one sentence."
     )
 
-    result = await agent.start().finish_task(task)
+    result = await agent.finish_task(task)
 
     print(result)
 
@@ -108,7 +108,7 @@ agent = (
 
 agent.add_task("Read CHANGELOG.md and summarize the entries added since the last release.")
 
-agent.start()
+results = await agent.finish()
 ```
 
 The [prompt skill](../../skills/prompt/SKILL.md) provides a compact template for writing agent roles.
@@ -129,7 +129,10 @@ The [prompt skill](../../skills/prompt/SKILL.md) provides a compact template for
 | | `knowledge(store)` | Share a knowledge store with the agent. |
 | | `interactive()` | Let the agent wait for new instructions to keep a task in-progress. |
 | **Work** | `add_task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task ID. |
-| | `start()` | Begin processing tasks. |
+| | `start()` | Keep processing tasks in the background. |
+| | `finish_task(query)` | Wait for all matches and return the first result in query order. |
+| | `finish_tasks(query)` | Wait for matching tasks and get their results. |
+| | `finish()` | Run tasks and return their results. |
 | | `get_id()` | Get the unique identifier of an agent. |
 
 You can use the `{context}` variable to inject contextual information:
@@ -161,15 +164,15 @@ id = agent.add_task("Where does the configuration get loaded?")
 
 werk = agent.start()
 werk.on_result(show)
-await werk.finish_all_tasks()
+await werk.finish()
 
 werk.add_reply(id, "And which environment variables override it?")
-await werk.finish_all_tasks()
+await werk.finish()
 
 werk.set_task_finished(id, "answered")
 ```
 
-An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `in_progress` with its agent, and each `await werk.finish_all_tasks()` returns on the answer it waited for. `add_reply(id, content)` supplies the next message, and `set_task_finished(id, result)` ends the conversation with the result reported to the hook. The answers in between arrive as [events](#events).
+An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `in_progress` with its agent, and each `await werk.finish()` returns on the answer it waited for. `add_reply(id, content)` supplies the next message, and `set_task_finished(id, result)` ends the conversation with the result reported to the hook. The answers in between arrive as [events](#events).
 
 See more: [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Agent.html).
 
@@ -300,10 +303,10 @@ werk.add_task(Task("Write up the ranking.", label="report"))
 | | `on_failure_async(handler)` | Read every failure and task in an async handler. |
 | | `on_task(handler)` | Read task state changes. |
 | | `on_task_async(handler)` | Read task state changes in an async handler. |
-| **Run** | `start()` | Begin processing tasks. |
-| | `finish_task(query)` | Wait for matching tasks and get the first result in query order. |
+| **Run** | `start()` | Keep processing tasks in the background. |
+| | `finish_task(query)` | Wait for all matches and return the first result in query order. |
 | | `finish_tasks(query)` | Wait for matching tasks and get their results. |
-| | `finish_all_tasks()` | Wait for every task and get every result. |
+| | `finish()` | Run tasks and return their results. |
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
 | | `cancel_all_tasks()` | Stop work on every task. |
 | **Inspect tasks** | `get_task(id)` | Get one task by ID. |
@@ -386,7 +389,7 @@ stay in event-log order. Ordering may use a task or event field.
 Result finders return raw task results. They require `task.result` to be present
 and default `task.status` to `finished` unless the query names a status.
 
-Task, event, and joined AQL also work with `finish_*` and `cancel_tasks`. Event
+Task, event, and joined AQL also work with completion methods and `cancel_tasks`. Event
 and joined queries snapshot the task IDs they reference when the operation
 starts. Task-only cancellation stays live and also applies to later matching
 tasks.
@@ -424,7 +427,7 @@ werk.find_tasks(lambda t: len(t.get_replies()) > 4)       # a callable, for what
 
 ### Execution
 
-The Werk schedules the work of your agents and returns their results.
+`start()` keeps processing tasks in the background. `finish()` runs tasks and waits for results.
 
 ```python
 task = werk.add_task("Write a report.")
@@ -439,10 +442,10 @@ if answer is not None:
 
 | | Method | Description |
 |-|--------|-------------|
-| **Run** | `start()` | Begin processing tasks. |
-| | `await finish_task(query)` | Wait for matching tasks and get the first result in query order. |
+| **Run** | `start()` | Keep processing tasks in the background. |
+| | `await finish_task(query)` | Wait for all matches and return the first result in query order. |
 | | `await finish_tasks(query)` | Wait for matching tasks and get their results. |
-| | `await finish_all_tasks()` | Wait for every task and get every result. |
+| | `await finish()` | Run tasks and return their results. |
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
 | | `cancel_all_tasks()` | Stop work on every task. |
 

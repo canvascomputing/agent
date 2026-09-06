@@ -90,6 +90,9 @@ def test_removed_api_names_are_absent_from_runtime_exports_and_stub():
     removed = {"TasksTool", "FetchUrlTool"}
     assert removed.isdisjoint(aw.__all__)
     assert removed.isdisjoint(stub_top_level_names())
+    for name in ("Agent", "Werk"):
+        assert "finish_all_tasks" not in stub_class_members(name)
+        assert not hasattr(getattr(aw, name), "finish_all_tasks")
     assert "task" not in stub_class_members("Agent")
     assert "handover" not in stub_class_members("Agent")
     assert "get_parent" not in stub_class_members("Task")
@@ -129,3 +132,16 @@ def test_the_stub_declares_nothing_the_module_lacks():
         if gap:
             extra[name] = sorted(gap)
     assert extra == {}
+
+
+def test_agent_and_werk_declare_the_same_async_finish_signatures():
+    signatures = []
+    for name in ("Agent", "Werk"):
+        methods = {method.name: method for method in stub_methods(name)}
+        finish = {}
+        for method_name in ("finish_task", "finish_tasks", "finish"):
+            method = methods[method_name]
+            assert isinstance(method, ast.AsyncFunctionDef)
+            finish[method_name] = (ast.dump(method.args), ast.dump(method.returns))
+        signatures.append(finish)
+    assert signatures[0] == signatures[1]

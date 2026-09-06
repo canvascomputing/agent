@@ -71,7 +71,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
          not known in advance. Answer with the names.",
     );
 
-    werk.finish_all_tasks().await;
+    werk.finish().await;
     common::print_result(&werk);
 
     let recorded = calls.lock().unwrap().clone();

@@ -85,13 +85,13 @@ mod tests {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
-                run_handle.finish_all_tasks().await;
+                run_handle.finish().await;
                 panic!("late-added agent did not finish task within 5s");
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        run_handle.finish_all_tasks().await;
+        run_handle.finish().await;
 
         assert_eq!(provider.requests(), 1);
     }
@@ -130,7 +130,7 @@ mod tests {
             }
         });
 
-        werk.finish_all_tasks().await;
+        werk.finish().await;
 
         let task = werk.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
@@ -174,13 +174,13 @@ mod tests {
                 break;
             }
             if tokio::time::Instant::now() > deadline {
-                run_handle.finish_all_tasks().await;
+                run_handle.finish().await;
                 panic!("late-added agent did not finish task within 5s");
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
-        tokio::time::timeout(Duration::from_secs(2), run_handle.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(2), run_handle.finish())
             .await
             .expect("start() did not return within 2s of signal flip");
     }

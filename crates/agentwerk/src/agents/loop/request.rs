@@ -415,7 +415,7 @@ mod tests {
         werk.add_agent(Agent::new().provider(provider).model("mock").role("test"));
         werk.add_task("go");
 
-        let run_fut = werk.finish_all_tasks();
+        let run_fut = werk.finish();
         let check_fut = async {
             for _ in 0..20 {
                 tokio::task::yield_now().await;
@@ -475,7 +475,7 @@ mod tests {
         werk.add_agent(Agent::new().provider(provider).model("mock").role("test"));
         werk.add_task("go");
 
-        let run_fut = werk.finish_all_tasks();
+        let run_fut = werk.finish();
         let cancel_handle = Arc::clone(&werk);
         let cancel_fut = async {
             for _ in 0..20 {
@@ -542,7 +542,7 @@ mod tests {
                 .tool(boom),
         );
         werk.add_task("go");
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
         (provider, werk, results_dir)
     }
 

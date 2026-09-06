@@ -6,7 +6,8 @@ The invariants that govern orchestration, tools, providers, events, and durable 
 
 **A `Werk` owns shared execution state; each `Agent` processes one claimed task at a time.**
 
-- Configure an `Agent`, bind it through `Werk::add_agent`, then drive the Werk with `start` or a `finish_*` method.
+- Configure an `Agent`, then drive its private or shared Werk with `start` or a completion method on either type. Agent execution registers its configured copy only once.
+- Delegate Agent completion to Werk without forcing a restart; on a shared Werk, Agent queries can select any task and `finish` waits for the entire Werk.
 - Let `Werk::bind_agent` move tasks queued on an agent's private Werk into the shared Werk.
 - Claim each task once and release Werk locks before `ProviderLike::respond` or a tool handler is awaited.
 - Keep one `Werk` as the orchestration boundary; nested Werks are not supported.
@@ -28,7 +29,7 @@ The invariants that govern orchestration, tools, providers, events, and durable 
 - Snapshot task IDs when an event or joined query enters a lifecycle operation. Keep task-only cancellation queries live so they also apply to tasks added later.
 - Treat a lone value as `task.label = value`, except that a bare `t-<n>` takes precedence as `task.id = t-<n>`. Keep fields in full expressions origin-qualified.
 - Use `Query::new` for runtime input so invalid AQL returns `QueryError`; infallible string conversions may panic.
-- Define pending work as unfinished, uncancelled work selected by the query; a task paused for caller input does not keep a `finish_*` wait open.
+- Define pending work as unfinished, uncancelled work selected by the query; a task paused for caller input does not keep a completion wait open.
 - Keep cancellation scoped to the current run: `start()` clears cancellation without changing `Status`.
 
 ## Completion
@@ -58,7 +59,7 @@ The invariants that govern orchestration, tools, providers, events, and durable 
 - Use `Event.name` as the semantic discriminator for built-in and application events.
 - Do not make publication mutate task state; completion through `EventTool` is the explicit exception.
 - Append events to `events.jsonl` before handlers run, excluding `text_chunk_received`, and fold policy statistics from the same records.
-- Keep synchronous handlers cheap; async hook variants are queued and drained by the waiting `finish_*` call.
+- Keep synchronous handlers cheap; async hook variants are queued and drained by the completion call.
 - Build `on_result`, `on_failure`, and `on_task` on the ordered `on_event` chain so handlers coexist.
 - Let an explicit directive keyed by a non-terminal `EventTool` event name replace its model-facing acknowledgement, binding the event's JSON data.
 

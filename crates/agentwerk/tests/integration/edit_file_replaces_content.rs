@@ -43,7 +43,7 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
          Leave the rest of the file untouched.",
     );
 
-    werk.finish_all_tasks().await;
+    werk.finish().await;
     common::print_result(&werk);
 
     assert!(

@@ -22,7 +22,7 @@ async def test_runs_a_single_task_to_a_result(live_agent):
         if event.get_name() == "run_finished"
         else None
     )
-    await werk.finish_all_tasks()
+    await werk.finish()
     assert werk.get_results()
     assert reasons == ["drained"]
 
@@ -59,7 +59,7 @@ async def test_invokes_a_python_tool(tmp_path):
     )
     agent.add_task("Read note.txt with the slurp tool and report the token it contains.")
     werk = agent.start()
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     assert calls, "the python tool was never invoked"
 
@@ -83,7 +83,7 @@ async def test_runs_two_labeled_agents_with_events_and_chaining():
 
     werk.on_result(chain)
     werk.add_task(aw.Task("Reply alpha", label="a"))
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     assert len(werk.get_results()) == 2
     assert "task_finished" in kinds
@@ -106,7 +106,7 @@ async def test_saves_the_messages_of_a_finished_task(tmp_path):
 
     werk.on_task(capture)
     id = werk.add_task("Reply with exactly the word: pong")
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     (agent_id, replies, model), = captured
     written = sorted(p.name for p in (tmp_path / "trajectories").iterdir())
@@ -137,7 +137,7 @@ async def test_compaction_summarizes_the_replies_against_the_live_model(tmp_path
     werk.add_reply(id, "Now name a second colour.")
     await _until(lambda: "compaction_finished" in kinds)
     werk.cancel_all_tasks()
-    await werk.finish_all_tasks()
+    await werk.finish()
 
     assert "compaction_failed" not in kinds
     texts = [b.get_data().get("text", "") for r in werk.get_task(id).get_replies() for b in r.get_content()]

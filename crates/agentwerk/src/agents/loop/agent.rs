@@ -252,7 +252,7 @@ mod tests {
         werk.add_task("a");
         werk.add_task("b");
 
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
 
@@ -287,7 +287,7 @@ mod tests {
 
         werk.start();
         werk.add_task("go");
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
 
@@ -327,7 +327,7 @@ mod tests {
 
         werk.start();
         werk.add_task("go");
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
 
@@ -378,7 +378,7 @@ mod tests {
         werk.start();
         werk.add_task(Task::new("go").label("scout"));
         werk.add_task(Task::new("go").label("worker"));
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
 
@@ -418,7 +418,7 @@ mod tests {
 
         werk.start();
         werk.add_task("go");
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
 
@@ -462,7 +462,7 @@ mod tests {
         werk.start();
         werk.add_task(Task::new("a").label("alice"));
 
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
 
@@ -524,7 +524,7 @@ mod tests {
         werk.add_task(Task::labeled("scan", "scan a.py"));
         werk.add_task(Task::labeled("scan", "scan b.py"));
 
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
 
@@ -571,7 +571,7 @@ mod tests {
         werk.start();
         werk.add_task(Task::new("a").label("alice"));
 
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
 
@@ -622,7 +622,7 @@ mod tests {
             ),
         );
 
-        let results = tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        let results = tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("event did not finish the task within 5s");
 
@@ -694,7 +694,7 @@ mod tests {
         );
 
         werk.cancel_all_tasks();
-        werk.finish_all_tasks().await;
+        werk.finish().await;
     }
 
     #[tokio::test]
@@ -745,7 +745,7 @@ mod tests {
             // The pause is not the end of the task, so the reply arrives first
             // and the finish then waits out the turn it sets off.
             inject.await;
-            werk.finish_all_tasks().await;
+            werk.finish().await;
         })
         .await
         .expect("test did not finish within 5s");
@@ -815,7 +815,7 @@ mod tests {
         werk.add_agent(interactive_chatbot(&provider));
         werk.add_task("hello");
 
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("test did not finish within 5s");
 
@@ -892,7 +892,7 @@ mod tests {
         };
 
         tokio::time::timeout(Duration::from_secs(5), async {
-            tokio::join!(werk.finish_all_tasks(), drive);
+            tokio::join!(werk.finish(), drive);
         })
         .await
         .expect("test did not finish within 5s");
@@ -914,7 +914,7 @@ mod tests {
         werk.add_agent(task_agent(&provider));
         werk.add_task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("test did not finish within 5s");
 
@@ -956,7 +956,7 @@ mod tests {
         werk.add_agent(task_agent(&provider));
         werk.add_task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("test did not finish within 5s");
 
@@ -988,7 +988,7 @@ mod tests {
         werk.add_agent(task_agent(&provider));
         werk.add_task("go");
 
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("test did not finish within 5s");
 
@@ -1027,7 +1027,7 @@ mod tests {
         werk.start();
         werk.cancel_all_tasks();
 
-        tokio::time::timeout(Duration::from_secs(2), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(2), werk.finish())
             .await
             .expect("run did not exit within 2s of cancel()");
     }
@@ -1095,7 +1095,7 @@ mod tests {
         assert_eq!(researcher.requests(), 0, "the researcher never ran");
 
         werk.cancel_all_tasks();
-        tokio::time::timeout(Duration::from_secs(2), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(2), werk.finish())
             .await
             .expect("finish returns after cancel()");
     }
@@ -1123,11 +1123,11 @@ mod tests {
         );
 
         werk.add_task("first");
-        werk.finish_all_tasks().await;
+        werk.finish().await;
         assert_eq!(werk.get_results().pop(), Some(serde_json::json!("first")));
 
         werk.add_task("second");
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("second finish did not finish within 5s");
         assert_eq!(werk.get_results().pop(), Some(serde_json::json!("second")));
@@ -1154,7 +1154,7 @@ mod tests {
 
         agent.add_task("hello");
         let werk = agent.start();
-        tokio::time::timeout(Duration::from_secs(5), werk.finish_all_tasks())
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("the run did not end within 5s");
         assert_eq!(
@@ -1205,7 +1205,7 @@ mod tests {
         );
         werk.add_task("first");
         werk.add_task("second");
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         let calls = provider.received();
         assert_eq!(calls.len(), 2);
@@ -1245,7 +1245,7 @@ mod tests {
         );
         werk.add_task("first");
         werk.add_task("second");
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 3);
@@ -1296,7 +1296,7 @@ mod tests {
                 .knowledge(&store),
         );
         werk.add_task("hi");
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 2);
@@ -1350,11 +1350,11 @@ mod tests {
         );
 
         werk.add_task(Task::new("alice work").label("a"));
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
         assert!(store.get_index().contains("alice-note"));
 
         werk.add_task(Task::new("bob work").label("b"));
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         let bob_prompts = p_b.received_system_prompts();
         assert_eq!(bob_prompts.len(), 1, "bob processed exactly one task");
@@ -1395,7 +1395,7 @@ mod tests {
                 .label("analysis"),
         );
         werk.add_task(Task::new("audit").label("analysis").schema(schema));
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         let task_message = &user_texts(&provider.received()[0])[0];
         assert!(
@@ -1552,7 +1552,7 @@ mod tests {
         );
         werk.add_task("first");
         werk.add_task("second");
-        let _ = werk.finish_all_tasks().await;
+        let _ = werk.finish().await;
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 4);

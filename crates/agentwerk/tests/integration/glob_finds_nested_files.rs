@@ -103,7 +103,7 @@ async fn finds_every_lib_rs_in_nested_tree() -> std::result::Result<(), Box<dyn 
         "Find every `lib.rs` file anywhere in the project tree, including nested directories.",
     );
 
-    werk.finish_all_tasks().await;
+    werk.finish().await;
     common::print_result(&werk);
 
     let recorded = calls.lock().unwrap().clone();

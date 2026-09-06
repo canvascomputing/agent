@@ -86,6 +86,11 @@ The rules the tables never repeat.
 | both | `.add_task(task)`: a string or json value stands in for the `Task` | |
 | both | `.start(): Werk` | pub |
 | Python | `.start()`: raises `RuntimeError` where Rust panics on a missing provider or model | |
+| both | `.finish_task(matches: Matcher<Task>): Promise<json?>` | pub |
+| both | `.finish_tasks(matches: Matcher<Task>): Promise<json[]>` | pub |
+| both | `.finish(): Promise<json[]>`: waits across the bound Werk | pub |
+| Python | `.finish_task(matches)` / `.finish_tasks(matches)`: accepts a `Query`, string, or callable | |
+| Python | `.finish_*()`: raises `RuntimeError` where Rust panics on a missing provider or model | |
 
 ### Internal
 
@@ -113,6 +118,7 @@ The rules the tables never repeat.
 | Rust | `.expand_context(role: string, policy: Policy, stats: Stats, task_id: string): string` | private |
 | Rust | `.interpolate(s: string): string` | private |
 | Rust | `.dispatch(task: Task): string` | private |
+| Rust | `.register(): Werk` | private |
 
 ## `crates/agentwerk/src/agents/compaction.rs`
 
@@ -683,7 +689,7 @@ The rules the tables never repeat.
 | both | `.start(): this` | pub |
 | both | `.finish_tasks(matches: Matcher<Task>): Promise<json[]>`: Event and Joined AQL snapshot current task IDs | pub |
 | Python | `.finish_tasks(matches)`: accepts a `Query` or a callable | |
-| both | `.finish_all_tasks(): Promise<json[]>` | pub |
+| both | `.finish(): Promise<json[]>` | pub |
 | both | `.finish_task(matches: Matcher<Task>): Promise<json?>` | pub |
 | Rust | `.get_finish_reason(): FinishReason?` | pub |
 | Python | `.get_finish_reason(): str?`: the string it prints as, such as `policy_violated(turns)` | |
@@ -2148,6 +2154,9 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `.tools(tools: any): this throws PyErr` | python |
 | Rust | `.add_task(task: PyTask): string throws PyErr` | python |
 | Rust | `.start(): PyWerk throws PyErr` | python |
+| Rust | `.finish_task(matches: any): Promise<any?> throws PyErr` | python |
+| Rust | `.finish_tasks(matches: any): Promise<any[]> throws PyErr` | python |
+| Rust | `.finish(): Promise<any[]> throws PyErr` | python |
 
 ### Internal
 
@@ -2445,7 +2454,7 @@ Binds `agents/tasks/werk.rs` and `store.rs`.
 | Rust | `.edit_replies(id: string, editor: any): this throws PyErr` | python |
 | Rust | `.start(): this` | python |
 | Rust | `.finish_tasks(matches: any): Promise<any[]> throws PyErr` | python |
-| Rust | `.finish_all_tasks(): Promise<any[]> throws PyErr` | python |
+| Rust | `.finish(): Promise<any[]> throws PyErr` | python |
 | Rust | `.finish_task(matches: any): Promise<any?> throws PyErr` | python |
 | Rust | `.get_finish_reason(): string?` | python |
 | Rust | `.cancel_tasks(matches: any): this throws PyErr` | python |

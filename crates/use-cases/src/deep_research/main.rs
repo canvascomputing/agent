@@ -95,7 +95,7 @@ async fn main() {
             .label("researcher_1"),
     );
 
-    werk.finish_all_tasks().await;
+    werk.finish().await;
     let outcome = classify_outcome(&werk);
 
     print_chain_summary(&werk);

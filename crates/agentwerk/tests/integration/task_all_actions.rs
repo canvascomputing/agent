@@ -99,7 +99,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
         .label("archive"),
     );
 
-    // Not `finish_all_tasks`: the decoy and the record the agent files are labelled
+    // Not `finish`: the decoy and the record the agent files are labelled
     // for nobody, so they stay `todo` and a wait on the whole Werk only ever
     // ends at the time cap.
     werk.finish_tasks("task.label IN (archive, auditor)").await;
