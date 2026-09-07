@@ -119,7 +119,8 @@ The [prompt skill](../../skills/prompt/SKILL.md) provides a compact template for
 | | Method | Description |
 |-|--------|-------------|
 | **Configure** | `role(role)` | Define who the agent is and how it should work. |
-| | `tool(tool)` / `tools(tools)` | Register a tool the agent may call. |
+| | `tool(tool)` | Register a tool the agent may call. |
+| | `tools(tools)` | Register several tools the agent may call. |
 | | `label(label)` | Restrict the agent to tasks carrying this label. |
 | | `dir(dir)` | Set the directory the agent has access to. |
 | | `template(key, value)` | Inject data into prompts with template strings. |
@@ -909,15 +910,20 @@ Events are saved to `.agentwerk/events.jsonl`, except `text_chunk_received`. The
 | `emit_event(event)` | Publish an event for querying and observation. |
 | `find_event(query)` | Get the first event selected directly or through a matching task. |
 | `find_events(query)` | Get events selected directly or through matching tasks, in query order. |
-| `get_input_tokens()` / `get_output_tokens()` | Get token counts across the run's requests. |
+| `get_input_tokens()` | Get input tokens across the run's requests. |
+| `get_output_tokens()` | Get output tokens across the run's requests. |
 | `get_duration()` | Get the elapsed execution duration. |
 
 | Event method | Description |
 |--------------|-------------|
-| `get_name()` / `get_data()` | Read the event name and payload. |
-| `get_task_id()` / `get_agent_id()` / `get_label()` | Read task and agent context. |
+| `get_name()` | Read the event name. |
+| `get_data()` | Read the event payload. |
+| `get_task_id()` | Read the associated task ID. |
+| `get_agent_id()` | Read the associated agent ID. |
+| `get_label()` | Read the associated task's label. |
 | `get_created_at()` | Read the timestamp in epoch milliseconds. |
-| `directive(value)` / `get_directive()` | Set or read directive metadata; this does not send an instruction to the model. |
+| `directive(value)` | Set directive metadata; this does not send an instruction to the model. |
+| `get_directive()` | Read the directive metadata. |
 
 The default logger runs when no event handler is installed.
 
