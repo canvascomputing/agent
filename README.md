@@ -107,7 +107,7 @@ let results = agent.finish().await;
 The [prompt skill](skills/prompt/SKILL.md) provides a compact template for writing agent roles.
 
 <details>
-<summary>All agent methods</summary>
+<summary>Agent reference</summary>
 
 | | Method | Description |
 |-|--------|-------------|
@@ -128,7 +128,7 @@ The [prompt skill](skills/prompt/SKILL.md) provides a compact template for writi
 | | `finish()` | Run tasks and return their results. |
 | | `get_id()` | Get the unique identifier of an agent. |
 
-You can use the `{context}` variable to inject contextual information:
+Use `{context}` in a role to include the current task and execution limits:
 
 ```markdown
 - Task: t-7
@@ -145,7 +145,7 @@ Every value is a variable of its own: `{task_id}`, `{date}`, `{dir}`, `{platform
 
 #### Interactive
 
-An interactive agent holds one task open across many turns, so a conversation spans a whole session.
+An interactive agent keeps a task open across replies. It has no completion tool by default.
 
 ```rust
 let agent = Agent::from_env().interactive();
@@ -161,9 +161,9 @@ werk.finish().await;
 werk.set_task_finished(&id, "answered")?;
 ```
 
-An interactive agent never finishes its own task, because that would end the conversation. Every answer pauses the task instead: it stays `in_progress` with its agent, and each `finish().await` returns on the answer it waited for. `add_reply(id, content)` supplies the next message, and `set_task_finished(id, result)` ends the conversation with the result reported to the hook. The answers in between arrive as [events](#events).
+Replies pause the task in `in_progress`, and completion methods return when it pauses. Use `add_reply(id, content)` to resume and `set_task_finished(id, result)` to end the conversation. Intermediate replies arrive as [events](#events); `on_result` receives the final result.
 
-See more: [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Agent.html).
+See [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Agent.html).
 
 </details>
 
@@ -180,14 +180,14 @@ let agent = Agent::new()
 ```
 
 <details>
-<summary>All provider and model settings</summary>
+<summary>Provider and model reference</summary>
 
 | Method | Description |
 |--------|-------------|
 | `provider(provider)` | Define the LLM provider. |
 | `model(model)` | Set the model. |
 | `Agent::from_env()` | Read the provider and the model from environment variables. |
-| `Provider::verify(model).await` | Verify that the provider can answer with a model. |
+| `verify(model)` | Verify that the provider can answer with a model. |
 | `Anthropic::new(key).base_url(url).timeout(duration)` | Configure an Anthropic endpoint. The OpenAI, Mistral, and LiteLLM types expose the same methods. |
 
 You can also read the model or provider individually: `.provider(Provider::from_env()?)` or `.model(Model::from_env()?)`.
@@ -255,7 +255,7 @@ werk.add_task(Task::labeled("report", "Write up the ranking."));
 ```
 
 <details>
-<summary>All Werk methods</summary>
+<summary>Werk reference</summary>
 
 | | Method | Description |
 |-|--------|-------------|
@@ -311,24 +311,15 @@ directly, or compile it with `Query::new` to reuse it.
 // Find tasks labeled `scan`.
 werk.find_tasks("scan");
 
-// Find tasks referenced by failed tool-call events.
-werk.find_tasks("event.name = tool_call_failed");
-
-// Find events attached to tasks labeled `scan`.
-werk.find_events("scan");
-
 // Find failed tool calls from scan tasks.
 werk.find_events("scan AND event.name = tool_call_failed");
 
 // Find the result produced by task `t-3`.
 werk.find_results("t-3");
-
-// Find results produced by tasks with finished events.
-werk.find_results("event.name = task_finished");
 ```
 
 <details>
-<summary>All query terms</summary>
+<summary>Query reference</summary>
 
 #### Terms
 
@@ -351,40 +342,34 @@ werk.find_results("event.name = task_finished");
 | **Task** | `task.id`, `task.label`, `task.status`, `task.pending`, `task.cancelled`, `task.assignee`, `task.input`, `task.result`, `task.errors`, `task.created`, `task.started`, `task.finished`, `task.failed` |
 | **Event** | `event.name`, `event.agent_id`, `event.task_id`, `event.label`, `event.created`, `event.data` |
 
-Queries using both namespaces are inner joins: events without a task and events
-whose task no longer exists do not match. Without `ORDER BY`, joined matches
-stay in event-log order. Ordering may use a task or event field.
+Queries using both namespaces match events with their referenced tasks. Events without an existing task do not match. Joined matches default to event-log order; `ORDER BY` accepts task or event fields.
 
-Result finders return raw task results. They require `task.result` to be present
-and default `task.status` to `finished` unless the query names a status.
+Result finders return raw results where `task.result` is present. They select finished tasks unless the query specifies another status.
 
-Task, event, and joined AQL also work with completion methods and `cancel_tasks`. Event
-and joined queries snapshot the task IDs they reference when the operation
-starts. Task-only cancellation stays live and also applies to later matching
-tasks.
+Completion methods and `cancel_tasks` also accept AQL. Event and joined queries snapshot matching task IDs when the operation starts. Task-only cancellation also applies to later matching tasks.
 
 #### Rules
 
-Write the field, followed by what it must match:
+Missing values do not match `!=`. Include unlabeled tasks with `task.label IS EMPTY OR task.label != scan`.
 
-- Exact value: `task.label = scan`
-- Contains text: `task.result ~ timeout`
-- Time range: `task.failed > -1h`
-- Has no value: `task.assignee IS EMPTY`
+Qualify fields in full expressions. Use parentheses when mixing `AND` and `OR`; `NOT` applies to the next condition or group. Query keywords ignore case; labels and IDs do not.
 
-Missing values do not match `!=`. For example, `task.label != scan` leaves out tasks with no label. To include them, use `task.label IS EMPTY OR task.label != scan`.
+Times accept UTC dates such as `2026-08-30`, epoch milliseconds, or offsets such as `-30m`, `-2h`, `-7d`, and `-1w`. Offsets are resolved when a query is compiled; reusing a compiled query keeps its original cutoff.
 
-Use a lone value as task-label shorthand: `scan` means `task.label = scan`, and `"needs review"` supports spaces or query words. Qualify fields in full expressions such as `task.label = scan`. Put lists in parentheses: `task.label IN (scan, report)`.
-
-Use parentheses when mixing `AND` and `OR` to make the order clear. `NOT` applies to the condition or parenthesized group after it. Query words such as `AND` ignore case; labels and IDs do not.
-
-Times accept UTC dates such as `2026-08-30`, epoch milliseconds, or offsets such as `-30m`, `-2h`, `-7d`, and `-1w`.
-
-`ORDER BY field` sorts source records from lowest to highest. Add `DESC` for the reverse. Records with no value for that field come last. Projected tasks and results follow matching event order, with each task returned once. Projected events are grouped by matching task order and retain log order within each task.
+Missing sort values come last in either direction. Tasks and results selected through events follow matching event order, with each task returned once. Events selected through tasks follow task order, then log order within each task.
 
 #### Examples
 
 ```rust
+// Find tasks referenced by failed tool-call events.
+werk.find_tasks("event.name = tool_call_failed");
+
+// Find events attached to tasks labeled `scan`.
+werk.find_events("scan");
+
+// Find results produced by tasks with finished events.
+werk.find_results("event.name = task_finished");
+
 werk.find_results("report AND task.result ~ risk");
 werk.find_tasks("task.errors ~ tool_call_failed");
 werk.find_tasks("task.status = todo AND task.assignee IS EMPTY");
@@ -407,18 +392,18 @@ if let Some(answer) = werk.finish_task(task).await {
 ```
 
 <details>
-<summary>All execution methods</summary>
+<summary>Execution and task reference</summary>
 
 | | Method | Description |
 |-|--------|-------------|
 | **Run** | `start()` | Keep processing tasks in the background. |
-| | `finish_task(query).await` | Wait for all matches and return the first result in query order. |
-| | `finish_tasks(query).await` | Wait for matching tasks and get their results. |
-| | `finish().await` | Run tasks and return their results. |
+| | `finish_task(query)` | Wait for all matches and return the first result in query order. |
+| | `finish_tasks(query)` | Wait for matching tasks and get their results. |
+| | `finish()` | Run tasks and return their results. |
 | **Cancel** | `cancel_tasks(query)` | Stop work on matching tasks. |
 | | `cancel_all_tasks()` | Stop work on every task. |
 
-Cancellation applies only to the current execution: it does not change `status` or remain attached to the task. `start()` clears cancellation so unfinished tasks can resume. Use `task.is_cancelled()` for a task you hold, or `task.cancelled = true` and `task.pending = true` to select by execution state.
+Cancellation affects only the current execution, not persisted task status. Starting a new run with `start()` clears cancellation. Inspect it with `task.is_cancelled()`, or query execution state with `task.cancelled = true` and `task.pending = true`.
 
 Task members:
 
@@ -451,15 +436,16 @@ See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/struct.Task.html).
 
 ### Sharing results
 
-Agents can pass work and results in four ways:
+Agents can pass work and results in five ways:
 
 1. **Result hook**: `on_result` creates follow-up tasks from completed work.
-2. **Knowledge**: the `knowledge` tool shares durable pages between agents.
-3. **Task tool**: the `task` tool reads any finished task's result by ID.
-4. **Read result file**: the `read_file` tool opens a task's `result.json` in the session directory.
+2. **Template variables**: `template` injects a result into another agent's prompt.
+3. **Knowledge**: the `knowledge` tool shares durable pages between agents.
+4. **Task tool**: the `task` tool reads any finished task's result by ID.
+5. **Read result file**: the `read_file` tool opens a task's `result.json` in the session directory.
 
 <details>
-<summary>All ways agents pass data</summary>
+<summary>Result-sharing examples</summary>
 
 #### 1. Result hook
 
@@ -473,7 +459,19 @@ werk.on_result(|werk, done, result| {
 });
 ```
 
-#### 2. Knowledge
+#### 2. Template variables
+
+Inject a result into the next agent's role or text task:
+
+```rust
+let writer = Agent::from_env()
+    .role("Use this research:\n{research}")
+    .template("research", research);
+
+writer.add_task("Write the board report.");
+```
+
+#### 3. Knowledge
 
 Hand both agents one store, and either can write a page the other reads:
 
@@ -486,7 +484,7 @@ let writer = Agent::from_env().label("report").knowledge(&store);
 analyst.add_task("Rank the products by value, then save the ranking to your knowledge.");
 ```
 
-#### 3. Task tool
+#### 4. Task tool
 
 Give the writer `TaskTool`, and it reads what any finished task produced, by ID:
 
@@ -498,7 +496,7 @@ let writer = Agent::from_env()
 writer.add_task("Read the result of t-1, then write the board report.");
 ```
 
-#### 4. Read result file
+#### 5. Read result file
 
 Give the writer `ReadFileTool` instead, and it opens the result file named at the end of its task:
 
@@ -516,7 +514,7 @@ Results live in the session directory, one `result.json` per task.
 
 ### Schemas
 
-A `Schema` defines the required shape of a task result. agentwerk decodes quoted JSON numbers, booleans, objects, and arrays, and corrects case or outer whitespace when a string names one string enum value. Enum correction never changes JSON type. For other violations, it asks the model to retry up to `max_schema_retries`.
+A `Schema` defines the required shape of a task result.
 
 ```rust
 use agentwerk::schemas::Schema;
@@ -531,15 +529,18 @@ werk.add_task(Task::new("Write a report.").schema(schema));
 ```
 
 <details>
-<summary>All schema methods</summary>
+<summary>Schema reference</summary>
 
-For small models, use shallow, focused schemas with few required fields, clear names, and short lists of allowed values. Split large results into labeled tasks with separate schemas, then combine them in a later task. Deep nesting, long property lists, and large `anyOf` or `oneOf` branches use more context and trigger retries.
+Quoted JSON numbers, booleans, objects, and arrays are converted to the schema's expected type. String enums allow case and outer-whitespace corrections when they identify one candidate; enum correction never changes JSON type. Other result violations trigger a retry, subject to `max_schema_retries`.
+
+Use shallow, focused schemas for small models. Split complex work into tasks with separate schemas.
 
 | | Method | Description |
 |-|--------|-------------|
 | **Schema** | `Schema::new(document)` | Create a schema. |
-| | `validate(value)` | Validate content. |
+| | `validate(value)` | Return the validated value and JSON pointers to repaired values, or report violations. |
 | | `get_raw_schema()` | Read the JSON Schema document the schema was built from. |
+
 See [`Schema`](https://docs.rs/agentwerk/latest/agentwerk/schemas/struct.Schema.html).
 
 </details>
@@ -557,7 +558,7 @@ werk.set_policy(Policy {
 ```
 
 <details>
-<summary>All configuration fields</summary>
+<summary>Configuration reference</summary>
 
 | Field | Description |
 |-------|-------------|
@@ -566,9 +567,9 @@ werk.set_policy(Policy {
 | `max_input_tokens` | Limit the total input tokens. |
 | `max_output_tokens` | Limit the total output tokens. |
 | `max_request_tokens` | Limit the output tokens of a single request. |
-| `max_schema_retries` | Limit the consecutive turns without a valid tool call. |
+| `max_schema_retries` | Limit consecutive failed tool calls or silent replies; a successful call resets the count. |
 | `max_request_retries` | Limit how often a failing request is retried. |
-| `request_retry_delay` | Wait this long between retries. |
+| `request_retry_delay` | Set the base delay for exponential backoff between request retries. |
 | `compaction_threshold` | Compact once the next request would fill this share of the window. |
 
 `set_policy(policy)` replaces the whole configuration, and `get_policy()` reads it back. A violated limit emits `Event::POLICY_VIOLATED`. `compaction_threshold` is the exception, see [Compaction](#compaction).
@@ -577,7 +578,7 @@ werk.set_policy(Policy {
 
 ### Compaction
 
-Compaction summarizes a task's older messages once they no longer fit the model's context window.
+Compaction summarizes older messages as a task approaches the model's context limit or after the provider reports an overflow.
 
 ```rust
 werk.set_policy(Policy {
@@ -587,7 +588,7 @@ werk.set_policy(Policy {
 ```
 
 <details>
-<summary>When compaction runs and what it reports</summary>
+<summary>Compaction reference</summary>
 
 `compaction_threshold` is a fraction of the model's context window, `0.85` by default. Reaching it summarizes the older messages and the agent continues its task.
 
@@ -607,7 +608,7 @@ Each compaction event carries the trigger: `proactive` before a context-window e
 
 ### Directives
 
-A directive tells the model how to recover: call a tool, match a schema, correct a path, narrow a search, or choose an allowed command. You can replace the built-in wording for your model or environment.
+Directives tell the model how to recover from failures. Override their wording for your model or environment.
 
 ```rust
 let agent = Agent::from_env()
@@ -618,19 +619,26 @@ let agent = Agent::from_env()
     ]);
 ```
 
-Use a built-in directive key such as `grep_failed` to replace recovery text. To replace the message returned after `EventTool` publishes an event, use that event's name as the key. Built-ins without a replacement keep their default wording. Templates may use runtime values such as `{detail}`, `{attempt}`, and `{path}`; placeholders without a value remain unchanged. Recovery text should state what failed and what the model should do next.
+<details>
+<summary>Directive reference</summary>
+
+Built-in keys override recovery text; keys without overrides retain their defaults. Templates accept runtime values such as `{detail}`, `{attempt}`, and `{path}`. Placeholders without a value remain unchanged.
+
+For non-terminal `EventTool` events, use the event name as the key to replace the acknowledgement sent to the model. The template can use `{data}` for the JSON payload or a top-level field such as `{path}`. The event and tool result record the directive key.
 
 See [prompts/directives](https://github.com/canvascomputing/agentwerk/tree/main/crates/agentwerk/src/prompts/directives) for the built-in text.
 
+</details>
+
 ### Sessions
 
-A `Werk` saves every task, reply, and event so you can continue the same session later.
+A `Werk` saves tasks, replies, and recorded events so you can resume a session.
 
 <div align="left">
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/sessions.gif" width="600" />
 </div>
 
-The working directory is `./.agentwerk` by default.
+The session directory is `./.agentwerk` by default.
 
 ```rust
 let werk = Werk::load(".agentwerk")?;
@@ -639,20 +647,20 @@ werk.start();
 ```
 
 <details>
-<summary>All session files</summary>
+<summary>Session files</summary>
 
 ```
 .agentwerk/
-├── events.jsonl                          every event (one per line)
+├── events.jsonl                        recorded events, one per line
 ├── tasks/
 │   └── t-1/
-│       ├── task.json                   the task without its messages (id, status, label, timestamps)
-│       ├── result.json                   the result the agent produced
-│       ├── replies.jsonl                 every message exchanged with the model, one per line
-│       └── outputs/<tool_use_id>.txt     full tool outputs spilled out of the messages
+│       ├── task.json                   task metadata and input
+│       ├── result.json                 task result
+│       ├── replies.jsonl               model messages, one per line
+│       └── outputs/<tool_use_id>.txt   full tool outputs
 └── knowledge/
-    ├── pages/<slug>.md                   knowledge pages
-    └── index.md                          knowledge index
+    ├── pages/<slug>.md                 knowledge pages
+    └── index.md                        knowledge index
 ```
 
 </details>
@@ -670,20 +678,8 @@ let agent = Agent::new()
     .tool(CommandTool::new("git").allow("git *"));
 ```
 
-Replace one tool's timeout with `timeout`. Zero means no timeout. Without an
-override, custom tools have no timeout, Fetch uses 60 seconds, Grep uses 180
-seconds, and Command uses the call's `timeout_ms` or 120 seconds.
-
-```rust
-use std::time::Duration;
-use agentwerk::tools::FetchTool;
-
-let quick_fetch = FetchTool::new().timeout(Duration::from_secs(15));
-let patient_fetch = FetchTool::new().timeout(Duration::ZERO);
-```
-
 <details>
-<summary>All built-in and custom tools</summary>
+<summary>Tool reference</summary>
 
 | | Tool | Description |
 |-|------|-------------|
@@ -700,9 +696,28 @@ let patient_fetch = FetchTool::new().timeout(Duration::ZERO);
 | | `TaskTool` | Read the Werk and create or edit tasks. |
 | **Knowledge** | `KnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
 
+#### Timeouts
+
+Override a tool's limit with `timeout(duration)`; zero disables it.
+
+```rust
+use std::time::Duration;
+use agentwerk::tools::FetchTool;
+
+let quick_fetch = FetchTool::new().timeout(Duration::from_secs(15));
+let patient_fetch = FetchTool::new().timeout(Duration::ZERO);
+```
+
+| Tool | Default timeout |
+|------|-----------------|
+| Custom tools | None |
+| `FetchTool` | 60 seconds |
+| `GrepTool` | 180 seconds |
+| `CommandTool` | The call's `timeout_ms`, or 120 seconds if omitted |
+
 #### `FinishTool` and `KnowledgeTool`
 
-`FinishTool` and `KnowledgeTool` are registered automatically on every agent. Agents use them to finish queued tasks or work with shared knowledge. An [interactive agent](#interactive) gets no `FinishTool` by default, since finishing its task would end the conversation. `FinishTool` is the compatibility wrapper around `EventTool`'s `task_finished` event; `EventTool` remains opt-in.
+`KnowledgeTool` is registered automatically. Non-interactive agents also get `FinishTool`; [interactive agents](#interactive) receive it only if you add it. Add `EventTool` explicitly to enable custom events.
 
 When a task carries an object schema, its displayed fields are the `finish` call: pass them directly. Scalar and unbound tasks retain the explicit `result` envelope:
 
@@ -714,7 +729,7 @@ When a task carries an object schema, its displayed fields are the `finish` call
 
 #### EventTool
 
-Give an agent `EventTool` to let it publish application events:
+Give an agent `EventTool` to let it publish custom events:
 
 ```rust
 use agentwerk::tools::EventTool;
@@ -731,17 +746,9 @@ The model supplies a name and optional JSON data:
 }
 ```
 
-Agentwerk records the current task and agent on every event. Werk handlers can react as events arrive, and queries can retrieve them later:
+Events carry the current task and agent context; see [Events](#events) for handlers and queries. Names are unrestricted; lowercase snake case is conventional.
 
-```rust
-werk.on_event(|_, event| {
-    println!("{}", event.get_name());
-});
-
-let events = werk.find_events("event.name = event_name");
-```
-
-Event names are open-ended; lowercase snake case is conventional. Publishing an event does not change the task's status. The exception is the built-in `task_finished` event, which has the same result behavior as `FinishTool`:
+Only `task_finished` completes the current task. Its result goes in `data.result`, including when the result is an object:
 
 ```json
 {
@@ -750,7 +757,7 @@ Event names are open-ended; lowercase snake case is conventional. Publishing an 
 }
 ```
 
-After publishing a non-terminal event, `EventTool` normally returns `Event <name> published` to the model. A directive with the event's name replaces this message. Its template can reference `{data}` for the complete JSON payload or any top-level field by name. The published event and tool result both record the directive key.
+Use [Directives](#directives) to customize the acknowledgement sent to the model.
 
 #### CommandTool
 
@@ -826,9 +833,11 @@ werk.on_event(|_, event| {
 ```
 
 <details>
-<summary>All event names and readers</summary>
+<summary>Event reference</summary>
 
-| | Kind | Description |
+#### Event names
+
+| | Name | Description |
 |-|------|-------------|
 | **Run** | `run_started` | Execution began. |
 | | `run_finished` | Execution ended, carrying its outcome. |
@@ -858,9 +867,9 @@ werk.on_event(|_, event| {
 | | `compaction_progress` | Compaction finished part of the work. |
 | | `compaction_finished` | Compaction replaced the older messages. |
 | | `compaction_failed` | Compaction could not finish. |
-| **Application** | name chosen by your application | An event published with `emit_event`. |
+| **Custom** | name chosen by your application | An event published with `emit_event`. |
 
-### Publish events
+#### Publish events
 
 Publish custom events through the Werk. Add agent or task context when relevant:
 
@@ -878,17 +887,11 @@ werk.emit_event(
 werk.emit_event(Event::new("index_refreshed"));
 ```
 
-The first event's name, data, and context are stored as:
+`Werk::emit_event` does not change task status. Use [EventTool](#eventtool) for model-driven completion through `task_finished`.
 
-```json
-{"name":"document_indexed","data":{"documents":42},"task_id":"t-1","agent_id":"indexer-1"}
-```
+#### Read events
 
-`emit_event` adds the timestamp and a known task's label. Lowercase snake case is conventional, but other names are accepted; quote names containing spaces or punctuation in AQL. Built-in events have named constructors, such as `Event::task_finished()` and `Event::request_started("model")`; their names are also available as constants. Publishing one runs its hooks and updates its statistics. It is saved according to the event's normal rules, but it does not change task or execution state.
-
-`Werk::emit_event` never changes a task's status. To let a model finish its current task through an event, register `EventTool` on its agent. When the model emits `task_finished`, the tool validates and stores `data.result`, then marks the current task finished. All other names only publish an event.
-
-Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are not saved. Read events through the Werk with these methods:
+Events are saved to `.agentwerk/events.jsonl`, except `text_chunk_received`. These streamed fragments reach handlers but are not available to event queries.
 
 | Method | Description |
 |--------|-------------|
@@ -898,14 +901,18 @@ Events are saved to `.agentwerk/events.jsonl`. `text_chunk_received` events are 
 | `get_input_tokens()` / `get_output_tokens()` | Get token counts across the run's requests. |
 | `get_duration()` | Get the elapsed execution duration. |
 
-An event handler usually checks `get_name()` and then reads its payload with `get_data()`. Use `get_task_id()`, `get_agent_id()`, and `get_label()` to trace where it came from, and `get_created_at()` to read its timestamp. Application events can attach a model-facing instruction with `directive(value)` and read it back with `get_directive()`. Agentwerk uses `event::default_logger()` when you do not install an event handler.
+| Event method | Description |
+|--------------|-------------|
+| `get_name()` / `get_data()` | Read the event name and payload. |
+| `get_task_id()` / `get_agent_id()` / `get_label()` | Read task and agent context. |
+| `get_created_at()` | Read the timestamp in epoch milliseconds. |
+| `directive(value)` / `get_directive()` | Set or read directive metadata; this does not send an instruction to the model. |
 
-</details>
+When no event handler is installed, `event::default_logger()` logs events.
 
-<details>
-<summary>All event query fields and rules</summary>
+#### Query events
 
-You can query events with AQL or a condition you supply.
+Query events with AQL or a predicate; see [Queries](#queries) for shared syntax.
 
 ```rust
 werk.find_events("event.name = tool_call_failed");
@@ -923,15 +930,11 @@ werk.find_events("event.data ~ timeout AND event.created > -1h");
 | **Search** | `event.data` | Search only the serialized raw event data as text. |
 | **Compare** | `event.created` | When the event was recorded. |
 
-Event queries follow the same [rules as task queries](#queries). Some events
-have no agent, task, or label; find them with `IS EMPTY`. `event.data` does not
-include the event name. Without `ORDER BY`, events remain oldest first.
-
-For your own event names, write `event.name = document_indexed`. Event labels use `event.label`, so they are never ambiguous with names.
-
-</details>
+Use `IS EMPTY` to find events without agent, task, or label context. `event.data` searches only the payload, not the name. Events default to oldest-first order.
 
 See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html) and [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
+
+</details>
 
 ### Hooks
 
@@ -946,18 +949,18 @@ werk.on_failure(|werk, _, failed| {
 ```
 
 <details>
-<summary>All hooks</summary>
+<summary>Hook reference</summary>
 
 | | Method | Description |
 |-|--------|-------------|
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
 | | `on_event_async(handler)` | Read every event in an async handler. |
 | | `on_result(handler)` | Read every finished task together with its result. |
-| | `on_result_async(handler)` | Read every finished task with its result, in an async handler. |
-| | `on_failure(handler)` | Read every failure together with the task it happened in. |
-| | `on_failure_async(handler)` | Read every failure with its task, in an async handler. |
-| | `on_task(handler)` | Read a task as it starts, finishes, or fails. |
-| | `on_task_async(handler)` | Read a task state change in an async handler. |
+| | `on_result_async(handler)` | Read every finished task and result in an async handler. |
+| | `on_failure(handler)` | Read every failure together with its task. |
+| | `on_failure_async(handler)` | Read every failure and task in an async handler. |
+| | `on_task(handler)` | Read task state changes. |
+| | `on_task_async(handler)` | Read task state changes in an async handler. |
 
 Save replies of every finished task as a training example:
 
@@ -973,7 +976,9 @@ werk.on_task(|werk, event, task| {
 
 #### Async handlers
 
-`on_result` pauses the agent until the hook finishes. Use `on_result_async` for slower work such as storing results in a database, posting them to an HTTP API, or uploading them to object storage.
+`on_result` runs synchronously on the agent; keep it brief. Use `on_result_async` for work that needs to await.
+
+Async hooks run while a completion method is waiting, and finish before it returns. `start()` alone does not run them. Do not call `finish`, `finish_task`, or `finish_tasks` inside an async hook: it can deadlock.
 
 ```rust
 let findings = Arc::clone(&database);
@@ -997,8 +1002,6 @@ See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
   <img src="https://raw.githubusercontent.com/canvascomputing/agentwerk/main/assets/knowledge.gif" width="600" />
 </div>
 
-Pages use the Open Knowledge Format (OKF).
-
 ```rust
 use agentwerk::Knowledge;
 
@@ -1008,9 +1011,9 @@ let bob = Agent::new().knowledge(&store);
 ```
 
 <details>
-<summary>Knowledge details</summary>
+<summary>Knowledge reference</summary>
 
-Each page is written to `./notes/pages/<slug>.md`, and every page gets one line in `./notes/index.md`. That list is injected into the prompt of every agent sharing the store, so each of them knows which pages it can read.
+Pages use the Open Knowledge Format (OKF) and are stored at `./notes/pages/<slug>.md`. Each has an entry in `./notes/index.md`, which is included in the prompts of agents sharing the store.
 
 | Method | Description |
 |--------|-------------|
@@ -1021,7 +1024,7 @@ Each page is written to `./notes/pages/<slug>.md`, and every page gets one line 
 | `get_pages().get_all()` | Get every page in the store. |
 | `clear()` | Remove every page from the store. |
 
-The prompt includes up to 12 000 characters of the knowledge index by default. If the index exceeds the configured limit, the agent reads the remainder from `index.md`. Pages are always saved in full.
+By default, prompts include up to 12,000 characters of the index; agents can read the rest from `index.md`. Pages are always saved in full.
 
 Create entries in code:
 
