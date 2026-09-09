@@ -1035,6 +1035,7 @@ Not bound: prompt preparation and rendering are private Werk behavior.
 |----------|------|------------|
 | Rust | `pub(crate) mod directives` | crate |
 | Rust | `mod prompt` | private |
+| Rust | `mod json_path` | private |
 | Rust | re-exports `RenderError` inside the crate | crate |
 | Rust | `CONTEXT_TEMPLATE: string` | private |
 | Rust | `retry_directive(detail: string): string` | crate |
@@ -1059,16 +1060,74 @@ Not bound: prompt preparation and rendering are private Werk behavior.
 | Rust | `render_template(template: string, resolve: (expression: string) => string? throws RenderError): string throws RenderError` | private |
 | Rust | `render_values(template: string, named_value: (name: string) => string?): string` | private |
 | Rust | `resolve_expression(werk: Werk, expression: string, named_value: (name: string) => string?): string? throws RenderError` | private |
+| Rust | `resolve_expression_value(werk: Werk, expression: string, named_value: (name: string) => string?): string? throws string` | private |
+| Rust | `resolve_result(werk: Werk, result: ResultExpression, named_value: (name: string) => string?): json throws string` | private |
 | Rust | `expand_nested(expression: string, named_value: (name: string) => string?): [string, boolean] throws string` | private |
 | Rust | `readable_expression(expression: string): string? throws string` | private |
-| Rust | `result_expression(expression: string): [string, string]?` | private |
+| Rust | `ResultKind` | private |
+| Rust | `.Result` | private |
+| Rust | `.Results` | private |
+| Rust | `.ResultPath` | private |
+| Rust | `.ResultPaths` | private |
+| Rust | `.parse(source: string): ResultKind?` | private |
+| Rust | `.selects_values(): boolean` | private |
+| Rust | `.is_plural(): boolean` | private |
+| Rust | `.uses_file_paths(): boolean` | private |
+| Rust | `ResultExpression { kind: ResultKind, query: string, json_path: string? }` | private |
+| Rust | `result_expression(expression: string): ResultExpression?` | private |
+| Rust | `split_json_path(source: string): [string, string?]` | private |
+| Rust | `is_json_path_separator(source: string, byte_offset: number): boolean` | private |
 | Rust | `expression_end(body: string): number? throws string` | private |
-| Rust | `is_plural(kind: string): boolean` | private |
-| Rust | `select_result(werk: Werk, kind: string, query: string): json throws string` | private |
-| Rust | `result_text(value: json, plural: boolean): string` | private |
+| Rust | `select_result(werk: Werk, kind: ResultKind, query: string): json throws string` | private |
+| Rust | `result_text(value: json): string` | private |
 | Rust | `readable(value: json): string` | private |
 | Rust | `readable_lines(value: json, indent: number): string[]` | private |
 | Rust | `result_value(werk: Werk, task: Task, use_path: boolean): json throws string` | private |
+
+## `crates/agentwerk/src/prompts/json_path.rs`
+
+### Internal
+
+| Language | Item | Visibility |
+|----------|------|------------|
+| Rust | `JsonPath { steps: Step[] }` | super |
+| Rust | `.parse(source: string): this throws JsonPathError` | super |
+| Rust | `.evaluate(value: json): json` | super |
+| Rust | `Step` | private |
+| Rust | `.Field(string)` | private |
+| Rust | `.Index(number)` | private |
+| Rust | `.Slice { start: number?, stop: number?, step: number }` | private |
+| Rust | `.ArrayWildcard` | private |
+| Rust | `.ObjectWildcard` | private |
+| Rust | `.Flatten` | private |
+| Rust | `JsonPathError { message: string }` | super |
+| Rust | `.new(message: string): this` | private |
+| Rust | `impl Display for JsonPathError` | super |
+| Rust | `impl Error for JsonPathError` | super |
+| Rust | `Parser { source: string, byte_offset: number }` | private |
+| Rust | `.new(source: string): this` | private |
+| Rust | `.parse(): JsonPath throws JsonPathError` | private |
+| Rust | `.initial_step(): Step throws JsonPathError` | private |
+| Rust | `.field_step(): Step throws JsonPathError` | private |
+| Rust | `.identifier(): Step throws JsonPathError` | private |
+| Rust | `.quoted_field(): Step throws JsonPathError` | private |
+| Rust | `.bracket_step(): Step throws JsonPathError` | private |
+| Rust | `.peek(): string?` | private |
+| Rust | `.advance(character: string): void` | private |
+| Rust | `.next_character(): string?` | private |
+| Rust | `.unsupported(): JsonPathError` | private |
+| Rust | `parse_index(source: string): Step throws JsonPathError` | private |
+| Rust | `parse_slice(source: string): Step throws JsonPathError` | private |
+| Rust | `parse_optional_integer(source: string, description: string): number? throws JsonPathError` | private |
+| Rust | `parse_integer(source: string, description: string): number throws JsonPathError` | private |
+| Rust | `is_identifier_start(character: string): boolean` | private |
+| Rust | `is_identifier_continue(character: string): boolean` | private |
+| Rust | `evaluate(value: json, steps: Step[]): json` | private |
+| Rust | `evaluate_each(values: json[], remaining_steps: Step[]): json` | private |
+| Rust | `array_index(length: number, index: number): number?` | private |
+| Rust | `slice(values: json[], start: number?, stop: number?, step: number): json[]` | private |
+| Rust | `positive_bound(bound: number?, length: number, default: number): number` | private |
+| Rust | `negative_bound(bound: number?, length: number, default: number): number` | private |
 
 ## `crates/agentwerk/src/providers/anthropic.rs`
 

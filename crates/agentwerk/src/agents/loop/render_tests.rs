@@ -387,6 +387,20 @@ async fn nested_render_failures_report_the_outer_expression() {
 }
 
 #[tokio::test]
+async fn json_path_failures_report_the_complete_template_expression() {
+    let (werk, _dir, _provider, id, _failures) =
+        fail_to_render(true, "{{ result: absent | items[?active] }}").await;
+
+    let task = werk.get_task(&id).unwrap();
+    let error = &task.get_errors()[0];
+    assert_eq!(error.get_name(), Event::PROMPT_RENDER_FAILED);
+    assert_eq!(
+        error.get_data()["expression"],
+        "result: absent | items[?active]"
+    );
+}
+
+#[tokio::test]
 async fn concurrent_tasks_receive_their_own_runtime_prompt_values() {
     let (werk, _dir) = session();
     let alpha = MockProvider::with_results(vec![Ok(write_result_response("alpha"))]);

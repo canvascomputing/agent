@@ -507,10 +507,60 @@ agentwerk fills placeholders in the role and task just before each task's first 
 | `{{ name }}` | The value assigned to `name`. |
 | `{{ result: AQL }}` | The first result. Strings appear as text and other values as compact JSON. |
 | `{{ results: AQL }}` | A compact JSON array of matching results. |
+| `{{ result: AQL \| path }}` | A value selected from the first result. |
+| `{{ results: AQL \| path }}` | A value selected from the array of matching results. |
 | `{{ result_path: AQL }}` | The absolute path of the first matching result file. |
 | `{{ result_paths: AQL }}` | A JSON array of absolute result file paths. |
 | `{{ readable(result: AQL) }}` | The first result as a readable outline. |
 | `{{ readable(results: AQL) }}` | Matching results as a readable outline. |
+
+You can select results with AQL and use ` | path` to select a value from their JSON. You can also use paths with functions such as `readable`: `{{ readable(result: research | findings[*].summary) }}`.
+
+For example, given this `research` result:
+
+```json
+{
+  "company": {"name": "Canvas Computing"},
+  "findings": [{"summary": "one"}, {"summary": "two"}]
+}
+```
+
+This template:
+
+```text
+{{ result: research | company.name }}
+```
+
+Renders as:
+
+```text
+Canvas Computing
+```
+
+Using `readable` with a wildcard:
+
+```text
+{{ readable(result: research | findings[*].summary) }}
+```
+
+Renders as:
+
+```text
+- one
+- two
+```
+
+| Path | Selects |
+|---|---|
+| `company.name` | A nested field. |
+| `metadata."build-id"` | A field that requires JSON quoting. |
+| `findings[0]`, `findings[-1]` | An array element. |
+| `findings[1:4]`, `findings[::-1]` | An array slice. |
+| `findings[*].summary` | The `summary` field from each array element. |
+| `authors.*.name` | The `name` field from each object value, in unspecified order. |
+| `groups[].members` | The `members` field after flattening one array level. |
+
+Missing fields, incompatible types, and out-of-range indexes produce `null`. Wildcards, slices, and flattening omit null values when more path steps follow. Filters, comparisons, logical expressions, literals, multi-selects, functions, and additional pipes are not supported.
 
 `{ name }` stays unchanged. To output the literal text `{{ name }}`, write `{{{{ name }}}}`.
 
