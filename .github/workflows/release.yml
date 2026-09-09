@@ -37,8 +37,7 @@ jobs:
           python-version: '3.12'
       - run: sudo apt-get update && sudo apt-get install -y ripgrep
       - run: python -m venv .venv
-      - run: .venv/bin/python -m pip install maturin pytest pytest-asyncio
-      - run: .venv/bin/maturin develop --manifest-path crates/agentwerk-py/Cargo.toml
+      - run: .venv/bin/python -m pip install './crates/agentwerk-py[test]'
       - run: .venv/bin/python -m pytest crates/agentwerk-py/tests -q -m 'not live'
 
   crate:
