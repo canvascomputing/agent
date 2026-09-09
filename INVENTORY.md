@@ -13,7 +13,6 @@ Signatures use one language-independent notation, so a Rust row and a Python row
 - A method returning its own type returns `this`: `Agent.provider(provider: Provider): this`.
 - `u8`, `u32`, `u64`, `usize`, `f32`, `f64`, and `Duration` are `number`, and a `Duration` constant shows milliseconds.
 - `&str`, `String`, `impl Into<String>`, `&Path`, and `PathBuf` are `string`.
-- `impl Into<Text>` is `Text`: a string is the text itself, a `&Path` or `PathBuf` names the file the crate reads and trims.
 - `bool` is `boolean`, `()` is `void`, `serde_json::Value` is `json`.
 - `Vec<T>` and `&[T]` are `T[]`, `HashMap<K, V>` and `BTreeMap<K, V>` are `Record<K, V>`.
 - `Option<T>` is `T?`, written that way rather than as a union because a `|` splits a table cell.
@@ -59,7 +58,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Agent { label: string?, interactive: boolean, werk: WerkRef, id: OnceLock<string>, provider: Provider?, model: Model?, role: string, templates: [string, string][], tools: Tool[], dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub with private fields |
+| Rust | `Agent { label: string?, interactive: boolean, werk: WerkRef, id: OnceLock<string>, provider: Provider?, model: Model?, role: string, tools: Tool[], dir: string, knowledge: Knowledge, directives: DirectiveStore }` | pub with private fields |
 | Rust | `impl Clone for Agent` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `Agent()` | |
@@ -67,13 +66,12 @@ The rules the tables never repeat.
 | Python | `.from_env()`: raises `RuntimeError` where Rust panics | |
 | both | `.provider(provider: Provider): this` | pub |
 | both | `.model(model: Model): this` | pub |
-| Rust | `.role(role: Text): this` | pub |
-| Python | `.role(role)`: a `str` is the role, an `os.PathLike` names the file holding it | |
+| both | `.role(role: string): this` | pub |
 | both | `.label(label: string): this` | pub |
 | both | `.interactive(): this` | pub |
-| both | `.template(key: string, value: string): this` | pub |
+| both | `.template(key: string, value: string): this`: delegates to Werk | pub |
 | Rust | `.templates(variables: [string, string][]): this` | pub |
-| Python | `.templates(variables)`: a mapping, so the bulk bind applies in key order where Rust preserves insertion order | |
+| Python | `.templates(variables)`: a mapping; repeated keys replace prior values in both languages | |
 | both | `.tool(tool: Tool): this` | pub |
 | both | `.tools(tools: Tool[]): this` | pub |
 | both | `.dir(dir: string): this` | pub |
@@ -112,11 +110,9 @@ The rules the tables never repeat.
 | Rust | `.get_knowledge(): Knowledge` | super |
 | Rust | `.get_directives(): DirectiveStore` | super |
 | Rust | `.get_dir(): string` | super |
+| Rust | `.get_role(): string` | super |
 | Rust | `.require_provider_and_model(): void` | super |
 | Rust | `.register_finish_tool(): void` | super |
-| Rust | `.system_prompt(knowledge: string?, policy: Policy, stats: Stats, task_id: string): string` | super |
-| Rust | `.expand_context(role: string, policy: Policy, stats: Stats, task_id: string): string` | private |
-| Rust | `.interpolate(s: string): string` | private |
 | Rust | `.dispatch(task: Task): string` | private |
 | Rust | `.register(): Werk` | private |
 
@@ -237,10 +233,12 @@ The rules the tables never repeat.
 |----------|------|------------|
 | Rust | `Agent.run(): Promise<void>` | super |
 | Rust | `.run_task(werk: Werk, task: Task): Promise<void>` | private |
+| Rust | `.create_system_prompt(werk: Werk, task: Task, knowledge: string, policy: Policy): string throws RenderError` | private |
 | Rust | `.run_is_over(werk: Werk): boolean` | private |
 | Rust | `.claim_task(werk: Werk): Task?` | private |
 | Rust | `.emit_event(werk: Werk, task_id: string, event: Event): Event` | super |
 | Rust | `.fail_task(werk: Werk, task_id: string): void` | super |
+| Rust | `.fail_render(werk: Werk, task_id: string, error: RenderError): void` | private |
 | Rust | `.silence_retry(werk: Werk, task_id: string, policy: Policy, consecutive_schema_failures: number): boolean` | private |
 
 ## `crates/agentwerk/src/agents/loop/compact.rs`
@@ -606,7 +604,6 @@ The rules the tables never repeat.
 | Rust | `impl From<&str> for Task` | pub |
 | Rust | `impl From<String> for Task` | pub |
 | Rust | `impl From<json> for Task` | pub |
-| Rust | `impl From<&Path> for Task`, `impl From<PathBuf> for Task`, and `impl From<&PathBuf> for Task`, reading the file as the task | pub |
 | Rust | `impl Persist for Task` | pub |
 | Rust | `impl AsUserMessage for Task` | pub |
 | Rust | `Status` | pub |
@@ -621,7 +618,8 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Task.is_waiting_for_response(): boolean` | crate |
+| Rust | `.initial_reply(werk: Werk): Reply throws RenderError` | crate |
+| Rust | `.is_waiting_for_response(): boolean` | crate |
 | Rust | `.is_paused(): boolean` | crate |
 | Rust | `.cancelled: boolean`: transient and excluded from serialization | crate |
 | Rust | `.to_messages(): Message[]` | crate |
@@ -645,7 +643,7 @@ The rules the tables never repeat.
 | Python | a string, such as `policy_violated(turns)` | |
 | Rust | `.Drained`, `.PolicyViolated(PolicyViolation)`, `.Cancelled` | pub |
 | Rust | `impl Display for FinishReason` | pub |
-| both | `Werk { weak_self: Weak<Werk>, tasks: Record<string, Task>, agents: Agent[], policy: Policy, run: Run, cancel_filters: CancelFilter[], terminal_transitions_in_flight: number, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_task_id: number? }` | pub |
+| both | `Werk { weak_self: Weak<Werk>, tasks: Record<string, Task>, agents: Agent[], policy: Policy, run: Run, cancel_filters: CancelFilter[], terminal_transitions: watch::Sender<number>, templates: Record<string, string>, stats: Stats, event_handlers: EventHandler[], awaited_events: AwaitedEvents, event_stream: Sender<Event>, dir: string, events_lock: void, join_handle: JoinHandle<void>?, next_task_id: number? }` | pub |
 | Rust | `.new(): this` | pub |
 | Python | `Werk()` | |
 | both | `.load(werk_dir: string): this throws io::Error` | pub |
@@ -665,6 +663,9 @@ The rules the tables never repeat.
 | both | `.on_task_async(handler: (werk: Werk, event: Event, task: Task) => Promise<void>): this` | pub |
 | Python | `.on_task_async(handler)`: takes an `async def`, on the same terms as `on_event_async` | |
 | both | `.get_model_for_agent(agent_id: string): string?` | pub |
+| both | `.set_template(key: string, value: string): this` | pub |
+| Rust | `.set_templates(variables: [string, string][]): this` | pub |
+| Python | `.set_templates(variables: Record<string, string>): this` | |
 | both | `.set_policy(policy: Policy): this` | pub |
 | both | `.get_policy(): Policy` | pub |
 | both | `.set_dir(dir: string): this` | pub |
@@ -756,8 +757,10 @@ The rules the tables never repeat.
 | Rust | `.bind_agent(agent: Agent): void` | crate |
 | Rust | `.has_agent(id: string): boolean` | crate |
 | Rust | `.clone_agents(): Agent[]` | crate |
-| Rust | `.next_event_or_end(stream: Event): Promise<boolean>` | private |
-| Rust | `.result_tasks(matches: Matcher<Task>): Task[]` | private |
+| Rust | `.next_event_or_end(stream: Receiver<Event>, transitions: watch::Receiver<number>): Promise<boolean>` | private |
+| Rust | `.result_tasks(matches: Matcher<Task>): Task[]` | crate |
+
+| Rust | `.template_values(): Record<string, string>` | crate |
 
 ## `crates/agentwerk/src/agents/tasks/trajectory.rs`
 
@@ -935,7 +938,7 @@ Not bound, like the rest of `codegrep`.
 |----------|------|------------|
 | Rust | `Event { name: string, data: json, task_id: string, agent_id: string, label: string?, created_at: number }` | pub with crate-private fields |
 | both | `.RUN_STARTED`, `.RUN_FINISHED`, `.TASK_CREATED`, `.TASK_STARTED`, `.TASK_FINISHED`, `.TASK_FAILED`, `.TURN_STARTED`: string | pub |
-| both | `.REQUEST_STARTED`, `.REQUEST_FINISHED`, `.REQUEST_FAILED`, `.REQUEST_RETRIED`, `.TEXT_CHUNK_RECEIVED`, `.TOOL_CALL_REPAIRED`: string | pub |
+| both | `.PROMPT_RENDER_FAILED`, `.REQUEST_STARTED`, `.REQUEST_FINISHED`, `.REQUEST_FAILED`, `.REQUEST_RETRIED`, `.TEXT_CHUNK_RECEIVED`, `.TOOL_CALL_REPAIRED`: string | pub |
 | both | `.TOOL_CALL_DECLINED`, `.TOOL_CALL_STARTED`, `.TOOL_CALL_FINISHED`, `.TOOL_CALL_FAILED`: string | pub |
 | both | `.KNOWLEDGE_WRITTEN`, `.KNOWLEDGE_READ`, `.KNOWLEDGE_REMOVED`, `.KNOWLEDGE_LISTED`, `.KNOWLEDGE_FAILED`: string | pub |
 | both | `.POLICY_VIOLATED`, `.SCHEMA_RETRIED`, `.COMPACTION_STARTED`, `.COMPACTION_PROGRESS`, `.COMPACTION_FINISHED`, `.COMPACTION_FAILED`: string | pub |
@@ -977,7 +980,7 @@ Not bound, like the rest of `codegrep`.
 | Language | Item | Visibility |
 |----------|------|------------|
 | Rust | `mod agents`, `mod event`, `mod providers`, `mod schemas`, `mod tools` | pub |
-| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Werk`, `Policy`, `PolicyViolation`, `Knowledge`, `Trajectory`, `Schema`, `Event`, `FinishReason`, `Text` | pub |
+| Rust | re-exports `Agent`, `Query`, `Reply`, `Status`, `Task`, `Werk`, `Policy`, `PolicyViolation`, `Knowledge`, `Trajectory`, `Schema`, `Event`, `FinishReason` | pub |
 | Python | `agentwerk` exports every bound class from one flat module | |
 
 ### Internal
@@ -999,22 +1002,6 @@ Not bound: the crate writes its own files.
 | Rust | `write_atomic(path: string, bytes: number[]): void throws io::Error` | crate |
 | Rust | `append_line(path: string, line: string): void throws io::Error` | crate |
 | Rust | `output_path(task_id: string, tool_use_id: string): string` | crate |
-
-## `crates/agentwerk/src/prompts/builder.rs`
-
-Not bound: `prompts` is crate-internal, reached through `Agent.role(..)`.
-
-### Internal
-
-| Language | Item | Visibility |
-|----------|------|------------|
-| Rust | `Prompt { system: string, task: string? }` | crate |
-| Rust | `PromptBuilder { role: Section?, knowledge: Section?, task: Section?, directives: Section[] }` | crate |
-| Rust | `.role(body: string): this` | crate |
-| Rust | `.knowledge(body: string): this` | crate |
-| Rust | `.task(body: string): this` | crate |
-| Rust | `.append_directive(body: string): this` | crate |
-| Rust | `.build(): Prompt` | crate |
 
 ## `crates/agentwerk/src/prompts/directives.rs`
 
@@ -1041,14 +1028,15 @@ Not bound directly: callers configure its crate-private store through `Agent.dir
 
 ## `crates/agentwerk/src/prompts/mod.rs`
 
-Not bound, except `Text`, which `lib.rs` re-exports from `text.rs`.
+Not bound: prompt preparation and rendering are private Werk behavior.
 
 ### Internal
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `mod builder`, `mod section` | private |
-| Rust | `pub(crate) mod directives`, `pub(crate) mod text` | crate |
+| Rust | `pub(crate) mod directives` | crate |
+| Rust | `mod prompt` | private |
+| Rust | re-exports `RenderError` inside the crate | crate |
 | Rust | `CONTEXT_TEMPLATE: string` | private |
 | Rust | `retry_directive(detail: string): string` | crate |
 | Rust | `compaction_directive(): string` | crate |
@@ -1056,44 +1044,25 @@ Not bound, except `Text`, which `lib.rs` re-exports from `text.rs`.
 | Rust | `arguments_retry_detail(tool_name: string, violations: string, schema: json?): string` | crate |
 | Rust | `context_values(dir: string, policy: Policy, stats: Stats, task_id: string): [string, string][]` | crate |
 | Rust | `optional(value: string?): string` | private |
-| Rust | `render_context(values: [string, string][]): string` | crate |
+| Rust | `render_context(values: [string, string][]): string` | private |
 | Rust | `format_current_date(): string` | private |
 
-## `crates/agentwerk/src/prompts/section.rs`
-
-Not bound, like the rest of `prompts`.
+## `crates/agentwerk/src/prompts/prompt.rs`
 
 ### Internal
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `Section { heading: string?, body: string }` | crate |
-| Rust | `.role(body: string): this` | crate |
-| Rust | `.knowledge(body: string): this` | crate |
-| Rust | `.task(body: string): this` | crate |
-| Rust | `.directive(body: string): this` | crate |
-| Rust | `.render(): string` | crate |
-
-## `crates/agentwerk/src/prompts/text.rs`
-
-Not bound: Python passes a `str` for the text and an `os.PathLike` for the file holding it, which `convert.py_to_text` reads.
-
-### Public
-
-| Language | Item | Visibility |
-|----------|------|------------|
-| Rust | `Text(string)`, the trimmed text | pub |
-| Rust | `.from_file(file: string): this throws io::Error` | pub |
-| Rust | `.into_string(): string` | pub |
-| Rust | `impl From<&str> for Text`, `impl From<String> for Text`, and `impl From<&String> for Text` | pub |
-| Rust | `impl From<&Path> for Text`, `impl From<PathBuf> for Text`, and `impl From<&PathBuf> for Text`, reading the file | pub |
-| Rust | `impl From<Text> for String` | pub |
-
-### Internal
-
-| Language | Item | Visibility |
-|----------|------|------------|
-| Rust | `Text.read(file: string): this`, panicking where `from_file` reports | private |
+| Rust | `RenderError { expression: string, message: string }` | crate |
+| Rust | `impl Clone`, `Debug`, `Display`, and `std::error::Error for RenderError` | crate |
+| Rust | `Werk.render_prompt(source: string, values: [string, string][]): string throws RenderError` | crate |
+| Rust | `Values = Record<string, string>` | private |
+| Rust | `render_source(template: string, named_value: (name: string) => string?, werk: Werk): string throws RenderError` | private |
+| Rust | `resolve_expression(werk: Werk, expression: string, named_value: (name: string) => string?): string? throws RenderError` | private |
+| Rust | `result_expression(expression: string): [string, string]?` | private |
+| Rust | `expression_end(body: string): number?` | private |
+| Rust | `resolve_result(werk: Werk, kind: string, query: string): string throws string` | private |
+| Rust | `result_value(werk: Werk, task: Task, use_path: boolean): json throws string` | private |
 
 ## `crates/agentwerk/src/providers/anthropic.rs`
 
@@ -1675,8 +1644,7 @@ Not bound: it is how `CommandTool` reads one command line.
 | both | `.allow_flag(flag: string): this` | pub |
 | both | `.deny(pattern: string): this` | pub |
 | both | `.deny_flag(flag: string): this` | pub |
-| Rust | `.description(description: Text): this` | pub |
-| Python | `.description(description)`: a `str` is the description, an `os.PathLike` names the file holding it | |
+| both | `.description(description: string): this` | pub |
 | both | `.concurrent(concurrent: boolean): this` | pub |
 | Rust | `impl From<CommandTool> for Tool` | pub |
 | Python | `CommandTool` converts when `Agent.tool(..)` receives it | |
@@ -2042,8 +2010,8 @@ Not bound: it is how `CommandTool` reads one command line.
 | Python | `@tool(concurrent=..)` | |
 | both | `.timeout(duration/seconds): this`; zero means unlimited | pub |
 | Python | `@tool(timeout=..)`; zero means unlimited | |
-| Rust | `.description(description: Text): this` | pub |
-| Python | `@tool(description=..)`, defaulting to the decorated function's docstring: a `str` is the description, an `os.PathLike` names the file holding it | |
+| Rust | `.description(description: string): this` | pub |
+| Python | `@tool(description=..)`, defaulting to the decorated function's docstring | |
 | Rust | `.handler(handler: (input: json) => Promise<Event>): this` | pub |
 | Python | the decorated function itself | |
 | Rust | registration panics when description or handler is missing | internal validation of public configuration |
@@ -2140,12 +2108,12 @@ Binds `agents/agent.rs`, whose section holds the Python spelling of each method.
 | Rust | `.from_env(): this throws PyErr` | python |
 | Rust | `.provider(provider: PyProvider): this` | python |
 | Rust | `.model(model: any): this throws PyErr` | python |
-| Rust | `.role(role: any): this throws PyErr` | python |
+| Rust | `.role(role: string): this` | python |
 | Rust | `.label(label: string): this` | python |
 | Rust | `.get_id(): string` | python |
 | Rust | `.interactive(): this` | python |
 | Rust | `.template(key: string, value: string): this` | python |
-| Rust | `.templates(variables: Record<string, string>): this` | python |
+| Rust | `.templates(variables: dict): this throws PyErr` | python |
 | Rust | `.dir(dir: string): this` | python |
 | Rust | `.knowledge(store: PyKnowledge): this` | python |
 | Rust | `.directive(key: string, template: string): this` | python |
@@ -2198,6 +2166,7 @@ Not bound: the one JSON boundary between the two languages.
 | Rust | `value_to_py(py: Python, value: json): any throws PyErr` | crate |
 | Rust | `py_to_value(obj: any): json throws PyErr` | crate |
 | Rust | `py_to_text(obj: any): string throws PyErr` | crate |
+| Rust | `py_to_templates(obj: dict): [string, string][] throws PyErr` | crate |
 | Rust | `runtime_error(message: string): PyErr` | crate |
 
 ## `crates/agentwerk-py/src/event.rs`
@@ -2413,7 +2382,7 @@ Binds `agents/tasks/task.rs`.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `to_task(arg: any): Task throws PyErr`, reading an `os.PathLike` as the file holding the task | crate |
+| Rust | `to_task(arg: any): Task throws PyErr` | crate |
 | Rust | `PyTask.from_task(task: Task): this` | crate |
 | Rust | `.to_task(): Task` | crate |
 
@@ -2434,6 +2403,8 @@ Binds `agents/tasks/werk.rs` and `store.rs`.
 | Rust | `.emit_event(event: PyEvent): PyEvent` | python |
 | Rust | `.set_task_finished(id: string, result: any): void throws PyErr` | python |
 | Rust | `.set_task_failed(id: string): void throws PyErr` | python |
+| Rust | `.set_template(key: string, value: string): this` | python |
+| Rust | `.set_templates(variables: dict): this throws PyErr` | python |
 | Rust | `.set_policy(policy: PyPolicy): this` | python |
 | Rust | `.get_policy(): PyPolicy` | python |
 | Rust | `.set_dir(dir: string): this` | python |
@@ -2510,7 +2481,7 @@ Binds `tools/`.
 | Rust | `.allow_flag(flag: string): this` | python |
 | Rust | `.deny(pattern: string): this` | python |
 | Rust | `.deny_flag(flag: string): this` | python |
-| Rust | `.description(description: any): this throws PyErr` | python |
+| Rust | `.description(description: string): this` | python |
 | Rust | `.concurrent(concurrent: boolean): this` | python |
 | Rust | `PyCommandTool.timeout(seconds: number): this throws PyErr` | python |
 

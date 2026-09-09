@@ -74,18 +74,18 @@ def test_command_tool_configuration_chains_on_one_object():
     assert tool.description("Run git commands.") is tool
 
 
-def test_command_tool_description_reads_a_path_as_the_file_holding_it(tmp_path):
+def test_command_tool_description_accepts_file_contents_read_by_the_caller(tmp_path):
     description = tmp_path / "git.tool.md"
     description.write_text("Run git commands.\n")
     tool = aw.CommandTool("git")
-    assert tool.description(description) is tool
+    assert tool.description(description.read_text()) is tool
 
 
-def test_tool_decorator_reads_a_description_from_a_path(tmp_path):
+def test_tool_decorator_accepts_file_contents_read_by_the_caller(tmp_path):
     description = tmp_path / "sample.tool.md"
     description.write_text("Describe the sample.\n")
 
-    @aw.tool(description=description)
+    @aw.tool(description=description.read_text())
     def sample(path: str) -> str:
         return path
 

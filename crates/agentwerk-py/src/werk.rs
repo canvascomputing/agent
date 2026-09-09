@@ -10,7 +10,7 @@ use pyo3::prelude::*;
 use serde_json::Value;
 
 use crate::agent::PyAgent;
-use crate::convert::{py_to_value, runtime_error, value_to_py};
+use crate::convert::{py_to_templates, py_to_value, runtime_error, value_to_py};
 use crate::event::{to_py_event, PyEvent};
 use crate::policy::PyPolicy;
 use crate::query::{to_event_matcher, to_task_matcher};
@@ -50,8 +50,7 @@ impl PyWerk {
 
     /// Submit a task and return its task ID.
     ///
-    /// A `str` is the task itself, and an `os.PathLike` names the file holding
-    /// it. A `Task` carries a custom label or schema with it.
+    /// A string is the task itself. A `Task` carries a custom label or schema.
     fn add_task(slf: PyRef<'_, Self>, task: &Bound<'_, PyAny>) -> PyResult<String> {
         Ok(slf.inner.add_task(to_task(task)?))
     }
@@ -80,6 +79,21 @@ impl PyWerk {
     /// Fail a task, from outside the execution. Raises when the ID is unknown.
     fn set_task_failed(&self, id: &str) -> PyResult<()> {
         self.inner.set_task_failed(id).map_err(runtime_error)
+    }
+
+    /// Insert or replace a shared value used by new tasks before their first request.
+    fn set_template<'py>(slf: PyRef<'py, Self>, key: String, value: String) -> PyRef<'py, Self> {
+        slf.inner.set_template(key, value);
+        slf
+    }
+
+    /// Insert or replace multiple shared values together.
+    fn set_templates<'py>(
+        slf: PyRef<'py, Self>,
+        variables: &Bound<'_, pyo3::types::PyDict>,
+    ) -> PyResult<PyRef<'py, Self>> {
+        slf.inner.set_templates(py_to_templates(variables)?);
+        Ok(slf)
     }
 
     /// Set execution limits and retry settings.

@@ -12,6 +12,17 @@ The invariants that govern orchestration, tools, providers, events, and durable 
 - Claim each task once and release Werk locks before `ProviderLike::respond` or a tool handler is awaited.
 - Keep one `Werk` as the orchestration boundary; nested Werks are not supported.
 
+## Prompts
+
+**Prompt rendering is a private Werk implementation detail; callers provide strings and shared template values.**
+
+- Delegate Agent setters to Werk. Import missing templates when binding; destination values win.
+- Resolve template values and AQL expressions in one pass inside `prompts/prompt.rs`; never scan inserted values.
+- Let Werk snapshot shared templates once when it prepares a role and initial string task, and report failures through `prompt_render_failed` before the first request.
+- Freeze the complete rendered system prompt at the task's first request. Reuse its earliest persisted system reply through later turns, retries, continuation, compaction, and reload.
+- Record the prepared task message and one frozen system prompt in replies. Keep shared templates as runtime configuration rather than persisted session data; ignore legacy captured template fields when loading tasks.
+- Keep later messages literal. AQL selects available results without waiting or creating dependencies.
+
 ## Assignment and Identity
 
 **Use labels for assignment and generated IDs for ownership.**
@@ -39,7 +50,7 @@ The invariants that govern orchestration, tools, providers, events, and durable 
 - Register `FinishTool` automatically for non-interactive agents; interactive agents pause and the host ends them with `Werk::set_task_finished`.
 - Bind an object `Schema` directly as the finish arguments; keep scalar and unbound results in the legacy `result` envelope.
 - Treat `EventTool`'s `task_finished` event as completion; every other published event remains observational.
-- Run synchronous result hooks before a finish becomes observable as drained, so a hook can file follow-up work safely.
+- Run synchronous result hooks before a finish becomes observable as drained, so a hook can file follow-up work safely. Wake completion waiters after terminal transitions finish, because the event itself precedes the handlers.
 - Move `Status` only through task-store transitions; reserve `Status::Failed` for system-driven terminal outcomes.
 
 ## Tools and Corrections

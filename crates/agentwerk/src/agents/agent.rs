@@ -4,14 +4,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use crate::prompts::{context_values, render_context, PromptBuilder, Text};
 use crate::providers::{Model, Provider};
 use crate::tools::{EventTool, FinishTool, KnowledgeTool, Tool};
 
 use super::knowledge::Knowledge;
-use super::policy::Policy;
 use super::query::Matcher;
-use super::stats::Stats;
 use super::tasks::{Task, Werk};
 use crate::prompts::directives::DirectiveStore;
 
@@ -84,7 +81,6 @@ pub struct Agent {
     provider: Option<Provider>,
     model: Option<Model>,
     role: String,
-    templates: Vec<(String, String)>,
     tools: Vec<Tool>,
     dir: PathBuf,
     knowledge: Arc<Knowledge>,
@@ -94,7 +90,7 @@ pub struct Agent {
 impl Clone for Agent {
     /// A clone is the same agent, id and Werk binding included. Reading the id
     /// here fixes it for both copies, and the shared binding lets either copy
-    /// submit work after one is added to a Werk.
+    /// add work after one is added to a Werk.
     fn clone(&self) -> Self {
         Self {
             id: OnceLock::from(self.get_id().to_string()),
@@ -105,7 +101,6 @@ impl Clone for Agent {
             provider: self.provider.clone(),
             model: self.model.clone(),
             role: self.role.clone(),
-            templates: self.templates.clone(),
             tools: self.tools.clone(),
             dir: self.dir.clone(),
             knowledge: Arc::clone(&self.knowledge),
@@ -135,7 +130,6 @@ impl Agent {
             label: None,
             interactive: false,
             werk: WerkRef::private(Werk::new()),
-            templates: Vec::new(),
             tools: Vec::new(),
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
@@ -182,10 +176,8 @@ impl Agent {
     /// placeholders out and nothing is added, so the role decides both whether
     /// those facts appear and where.
     ///
-    /// A string is the role itself; a `&Path` or `PathBuf` names the file
-    /// holding it, which panics when that file cannot be read.
-    pub fn role(mut self, role: impl Into<Text>) -> Self {
-        self.role = role.into().into_string();
+    pub fn role(mut self, role: impl Into<String>) -> Self {
+        self.role = role.into().trim().to_string();
         self
     }
 
@@ -214,26 +206,29 @@ impl Agent {
         self
     }
 
-    /// Inject data into prompts with template strings.
+    /// Insert or replace a template value shared by this agent.
     ///
-    /// `{key}` is replaced in the agent's role and in any text task submitted
-    /// through this agent. A placeholder with no value is left as it is.
-    /// Binding `context`, or any of the single names described on
-    /// [`Self::role`], replaces that built-in value.
-    pub fn template(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.templates.push((key.into(), value.into()));
+    /// Placeholders are filled just before each task's first request. All agents
+    /// in the Werk share these values, which remain literal after insertion.
+    pub fn template(self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.werk
+            .upgrade()
+            .expect("agent has a Werk")
+            .set_template(key, value);
         self
     }
 
-    /// Inject more than one entry into prompts.
-    pub fn templates<I, K, V>(mut self, variables: I) -> Self
+    /// Insert or replace several template values shared by this agent.
+    pub fn templates<I, K, V>(self, variables: I) -> Self
     where
         I: IntoIterator<Item = (K, V)>,
         K: Into<String>,
         V: Into<String>,
     {
-        self.templates
-            .extend(variables.into_iter().map(|(k, v)| (k.into(), v.into())));
+        self.werk
+            .upgrade()
+            .expect("agent has a Werk")
+            .set_templates(variables);
         self
     }
 
@@ -378,6 +373,10 @@ impl Agent {
         self.dir.clone()
     }
 
+    pub(super) fn get_role(&self) -> &str {
+        &self.role
+    }
+
     /// Refuse an agent that cannot call an LLM, at the moment it joins a Werk
     /// rather than on its first request.
     pub(super) fn require_provider_and_model(&self) {
@@ -402,82 +401,27 @@ impl Agent {
         }
     }
 
-    pub(super) fn system_prompt(
-        &self,
-        knowledge: Option<&str>,
-        policy: &Policy,
-        stats: &Stats,
-        task_id: &str,
-    ) -> String {
-        let mut b = PromptBuilder::default();
-        if !self.role.is_empty() {
-            let role = self.interpolate(&self.role);
-            b = b.role(self.expand_context(role, policy, stats, task_id));
-        }
-        if let Some(snap) = knowledge.filter(|s| !s.is_empty()) {
-            b = b.knowledge(snap.to_string());
-        }
-        b.build().system
-    }
-
-    /// Substitute the built-in `{context}` block and the single value behind
-    /// each of its bullets. Runs after [`Self::interpolate`], so a caller-bound
-    /// name has already consumed its placeholder and wins. Guarded on a brace
-    /// because gathering the values spawns `uname`.
-    fn expand_context(
-        &self,
-        role: String,
-        policy: &Policy,
-        stats: &Stats,
-        task_id: &str,
-    ) -> String {
-        if !role.contains('{') {
-            return role;
-        }
-        let values = context_values(&self.dir, policy, stats, task_id);
-        let mut out = role.replace("{context}", &render_context(&values));
-        for (name, value) in &values {
-            out = out.replace(&format!("{{{name}}}"), value);
-        }
-        out
-    }
-
-    fn interpolate(&self, s: &str) -> String {
-        if self.templates.is_empty() {
-            return s.to_string();
-        }
-        let mut out = s.to_string();
-        for (key, value) in &self.templates {
-            out = out.replace(&format!("{{{key}}}"), value);
-        }
-        out
-    }
-
     /// Submit a task and return its task ID.
     ///
-    /// A string is the task itself, and a `&Path` or `PathBuf` names the file
-    /// holding it. A [`Task`] carries a custom label or schema with it. Call
-    /// it as often as you like: one agent can work on many tasks.
+    /// A string is the task itself. A [`Task`] carries a custom label or schema
+    /// with it. Call it as often as you like: one agent can work on many tasks.
     pub fn add_task(&self, task: impl Into<Task>) -> String {
         self.dispatch(task.into())
     }
 
-    fn dispatch(&self, mut task: Task) -> String {
+    fn dispatch(&self, task: Task) -> String {
         let werk = self
             .werk
             .upgrade()
             .expect("Agent::add_task requires a bound Werk");
-        if let serde_json::Value::String(s) = &task.task {
-            task.task = serde_json::Value::String(self.interpolate(s));
-        }
         werk.insert(task, self.get_id().to_string())
     }
 
     /// Begin processing tasks, and hand back the Werk so results,
     /// waiting, and cancellation stay one call away.
     ///
-    /// The Werk takes the agent as it stands, so configure it first: a
-    /// setter called afterwards leaves the running copy untouched.
+    /// Configure the role, provider, and tools before starting. Template
+    /// setters update the shared Werk and remain effective after startup.
     ///
     /// ```no_run
     /// # use agentwerk::Agent;
@@ -568,6 +512,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::agents::policy::Policy;
+    use crate::agents::stats::Stats;
     use crate::event::Event;
     use crate::providers::TokenUsage;
 
@@ -692,39 +638,65 @@ mod tests {
         );
     }
 
-    /// The system prompt with no live state and a fixed task ID.
-    fn system_prompt(agent: &Agent, knowledge: Option<&str>) -> String {
-        agent.system_prompt(knowledge, &Policy::default(), &Stats::new(), "T-1")
+    fn create_system_prompt(
+        agent: &Agent,
+        knowledge: Option<&str>,
+        policy: &Policy,
+        stats: &Stats,
+        task_id: &str,
+    ) -> String {
+        let werk = agent.werk.upgrade().unwrap();
+        let context_values = crate::prompts::context_values(&agent.dir, policy, stats, task_id);
+        let rendered_role = werk.render_prompt(&agent.role, &context_values).unwrap();
+        let knowledge_body = knowledge.unwrap_or_default().trim_matches('\n');
+        match (rendered_role.is_empty(), knowledge_body.is_empty()) {
+            (_, true) => rendered_role,
+            (true, false) => format!("## Knowledge\n\n{knowledge_body}"),
+            (false, false) => {
+                format!("{rendered_role}\n\n## Knowledge\n\n{knowledge_body}")
+            }
+        }
     }
 
     #[test]
     fn a_role_without_the_placeholder_gets_no_context_block() {
         let agent = Agent::new().role("ROLE");
-        assert_eq!(system_prompt(&agent, None), "ROLE");
+        assert_eq!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
+            "ROLE"
+        );
     }
 
     #[test]
-    fn a_role_read_from_a_file_becomes_the_system_prompt() {
+    fn a_role_can_be_read_by_the_caller() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let file = dir.path().join("reviewer.md");
         std::fs::write(&file, "ROLE\n").unwrap();
-        let agent = Agent::new().role(file.as_path());
-        assert_eq!(system_prompt(&agent, None), "ROLE");
+        let role = std::fs::read_to_string(file).unwrap();
+        let agent = Agent::new().role(role);
+        assert_eq!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
+            "ROLE"
+        );
     }
 
     #[test]
-    fn a_role_read_from_a_file_keeps_its_placeholders_expandable() {
+    fn a_role_read_by_the_caller_keeps_its_placeholders_expandable() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let file = dir.path().join("reviewer.md");
         std::fs::write(&file, "ROLE\n\n{context}\n").unwrap();
-        let agent = Agent::new().role(file).dir("/tmp/check");
-        assert!(system_prompt(&agent, None).contains("- Working directory: /tmp/check"));
+        let role = std::fs::read_to_string(file).unwrap();
+        let agent = Agent::new().role(role).dir("/tmp/check");
+        assert!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1")
+                .contains("- Working directory: /tmp/check")
+        );
     }
 
     #[test]
     fn system_prompt_expands_the_context_placeholder() {
         let agent = Agent::new().role("ROLE\n\n{context}").dir("/tmp/check");
-        let prompt = system_prompt(&agent, None);
+        let prompt = create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1");
         assert!(prompt.starts_with("ROLE\n\n"));
         assert!(prompt.contains("- Task: T-1"));
         assert!(prompt.contains("- Working directory: /tmp/check"));
@@ -753,18 +725,21 @@ mod tests {
 
         // The exact rendering is pinned in `prompts`; what matters here is
         // that the role's placeholder sees the live policy and stats.
-        let rendered = agent.system_prompt(None, &policy, &stats, "T-1");
+        let rendered = create_system_prompt(&agent, None, &policy, &stats, "T-1");
 
         assert!(rendered.contains("- Turns remaining: 2"));
         assert!(rendered.contains("- Input tokens remaining: 750"));
     }
 
     #[test]
-    fn a_bound_context_variable_shadows_the_built_in_block() {
+    fn built_in_context_shadows_a_shared_template() {
         let agent = Agent::new()
             .role("{context}")
             .template("context", "- Note: mine");
-        assert_eq!(system_prompt(&agent, None), "- Note: mine");
+        assert!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1")
+                .starts_with("- Task: T-1")
+        );
     }
 
     #[test]
@@ -778,7 +753,7 @@ mod tests {
         };
         let stats = Stats::of([Event::new(Event::TURN_STARTED)]);
 
-        let rendered = agent.system_prompt(None, &policy, &stats, "T-1");
+        let rendered = create_system_prompt(&agent, None, &policy, &stats, "T-1");
 
         assert_eq!(rendered, "Task T-1 in /tmp/check, 2 turns left.");
     }
@@ -787,25 +762,36 @@ mod tests {
     fn task_is_not_an_alias_for_task_id() {
         let agent = Agent::new().role("{task}");
 
-        assert_eq!(system_prompt(&agent, None), "{task}");
+        assert_eq!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
+            "{task}"
+        );
     }
 
     #[test]
     fn a_single_budget_value_expands_to_nothing_when_unconfigured() {
         let agent = Agent::new().role("Turns left: {turns_remaining}.");
-        assert_eq!(system_prompt(&agent, None), "Turns left: .");
+        assert_eq!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
+            "Turns left: ."
+        );
     }
 
     #[test]
-    fn a_bound_single_value_shadows_the_built_in_one() {
+    fn built_in_value_shadows_a_shared_template() {
         let agent = Agent::new().role("{task_id}").template("task_id", "mine");
-        assert_eq!(system_prompt(&agent, None), "mine");
+        assert_eq!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
+            "T-1"
+        );
     }
 
     #[test]
     fn system_prompt_empty_when_role_unset() {
         let agent = Agent::new();
-        assert!(system_prompt(&agent, None).is_empty());
+        assert!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1").is_empty()
+        );
     }
 
     fn tool_names(agent: &Agent) -> Vec<String> {
@@ -867,13 +853,19 @@ mod tests {
         let agent = Agent::new()
             .role("You are {persona}.")
             .template("persona", "a senior reviewer");
-        assert_eq!(system_prompt(&agent, None), "You are a senior reviewer.");
+        assert_eq!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
+            "You are a senior reviewer."
+        );
     }
 
     #[test]
     fn unresolved_placeholders_pass_through() {
         let agent = Agent::new().role("Hi {missing}.");
-        assert_eq!(system_prompt(&agent, None), "Hi {missing}.");
+        assert_eq!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
+            "Hi {missing}."
+        );
     }
 
     #[test]
@@ -881,17 +873,23 @@ mod tests {
         let agent = Agent::new()
             .role("{greeting}, {name}.")
             .templates([("greeting", "Hello"), ("name", "Alice")]);
-        assert_eq!(system_prompt(&agent, None), "Hello, Alice.");
+        assert_eq!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
+            "Hello, Alice."
+        );
     }
 
     #[test]
     fn no_variables_renders_role_unchanged() {
         let agent = Agent::new().role("You are a senior reviewer.");
-        assert_eq!(system_prompt(&agent, None), "You are a senior reviewer.");
+        assert_eq!(
+            create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
+            "You are a senior reviewer."
+        );
     }
 
     #[tokio::test]
-    async fn add_task_interpolates_string_task_body() {
+    async fn add_task_keeps_source_for_initial_rendering() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let werk = crate::agents::Werk::new();
         werk.set_dir(dir.path().to_path_buf());
@@ -905,7 +903,7 @@ mod tests {
             .expect("task should have been enqueued");
         assert_eq!(
             stored.task,
-            serde_json::Value::String("Search rust forums.".into()),
+            serde_json::Value::String("Search {topic} forums.".into()),
         );
     }
 
@@ -965,7 +963,7 @@ mod tests {
 
         let id = agent.add_task("Inspect {target}.");
 
-        assert_eq!(werk.get_task(&id).unwrap().get_task(), "Inspect src.");
+        assert_eq!(werk.get_task(&id).unwrap().get_task(), "Inspect {target}.");
     }
 
     #[test]
@@ -1046,15 +1044,49 @@ mod tests {
     #[test]
     fn system_prompt_renders_knowledge_section_when_body_present() {
         let agent = Agent::new().role("R");
-        let prompt = system_prompt(&agent, Some("- **config**: Port 8080"));
-        assert!(prompt.contains("R"));
-        assert!(prompt.contains("## Knowledge\n\n- **config**: Port 8080"));
+        let prompt = create_system_prompt(
+            &agent,
+            Some("- **config**: Port 8080"),
+            &Policy::default(),
+            &Stats::new(),
+            "T-1",
+        );
+        assert_eq!(prompt, "R\n\n## Knowledge\n\n- **config**: Port 8080");
+    }
+
+    #[test]
+    fn system_prompt_formats_knowledge_without_rendering_its_contents() {
+        let agent = Agent::new().template("company", "Acme");
+        assert_eq!(
+            create_system_prompt(
+                &agent,
+                Some("\n{company}\n"),
+                &Policy::default(),
+                &Stats::new(),
+                "T-1",
+            ),
+            "## Knowledge\n\n{company}"
+        );
+        let agent = agent.role("\nRole\n");
+        assert_eq!(
+            create_system_prompt(
+                &agent,
+                Some("\n{company}\n"),
+                &Policy::default(),
+                &Stats::new(),
+                "T-1",
+            ),
+            "Role\n\n## Knowledge\n\n{company}"
+        );
     }
 
     #[test]
     fn system_prompt_omits_knowledge_when_body_empty() {
         let agent = Agent::new().role("R");
-        assert_eq!(system_prompt(&agent, Some("")), "R");
+        assert_eq!(
+            create_system_prompt(&agent, Some(""), &Policy::default(), &Stats::new(), "T-1",),
+            "R"
+        );
     }
 
     #[test]

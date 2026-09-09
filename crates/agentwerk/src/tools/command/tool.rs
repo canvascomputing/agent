@@ -11,7 +11,6 @@ use crate::prompts::directives::{
     COMMAND_FLAG_NOT_ALLOWED, COMMAND_MISSING, COMMAND_NOT_ALLOWED, COMMAND_PATTERN_DENIED,
     COMMAND_QUOTE_UNTERMINATED, COMMAND_SHELL_OPERATOR_FOUND,
 };
-use crate::prompts::Text;
 
 /// The shared part of every tool's description, with the per-instance patterns
 /// appended at construction time, and the arguments every one of them accepts.
@@ -146,11 +145,8 @@ impl CommandTool {
     }
 
     /// Override the auto-generated description.
-    ///
-    /// A string is the description itself; a `&Path` or `PathBuf` names the
-    /// file holding it, which panics when that file cannot be read.
-    pub fn description(mut self, description: impl Into<Text>) -> Self {
-        self.description = description.into().into_string();
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into().trim().to_string();
         self.custom_description = true;
         self
     }
@@ -482,12 +478,13 @@ mod tests {
     }
 
     #[test]
-    fn a_custom_description_named_by_a_path_is_read_from_that_file() {
+    fn a_custom_description_can_be_read_by_the_caller() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let file = dir.path().join("git.tool.md");
         std::fs::write(&file, "Run git commands.\n").unwrap();
+        let description = std::fs::read_to_string(file).unwrap();
         let tool = CommandTool::new("git")
-            .description(file.as_path())
+            .description(description)
             .allow("git *");
         assert_eq!(Tool::from(tool).get_description(), "Run git commands.");
     }

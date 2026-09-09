@@ -1,15 +1,15 @@
 //! Runs one agent from task claim through requests, tool calls, compaction, and resolution.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::agents::agent::Agent;
 use crate::agents::policy::{Policy, PolicyViolation};
 use crate::agents::query::Matcher;
-use crate::agents::tasks::{policy_violated, Reply, Status, Task, Werk};
+use crate::agents::tasks::{policy_violated, Author, Reply, Status, Task, Werk};
 use crate::event::Event;
 use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};
-use crate::providers::{AsUserMessage, Message, ProviderError};
+use crate::prompts::RenderError;
+use crate::providers::ProviderError;
 
 use super::{CompactReason, POLL_INTERVAL};
 
@@ -36,23 +36,16 @@ impl Agent {
         let task_id = task.id.clone();
         let tools = self.get_tools(&task);
         let policy = werk.get_policy();
-        let knowledge_index = self.get_knowledge().get_index();
-        let system_prompt =
-            self.system_prompt(Some(&knowledge_index), &policy, &werk.stats, &task_id);
+        let mut frozen_system_prompt = task
+            .get_replies()
+            .iter()
+            .filter(|reply| reply.get_author() == Author::System)
+            .flat_map(|reply| reply.get_content())
+            .find_map(|content| content.get_text())
+            .map(str::to_owned);
         let mut consecutive_schema_failures = 0;
 
         self.emit_event(werk, &task_id, Event::new(Event::TURN_STARTED));
-        if task.replies.is_empty() {
-            werk.append_reply(&task_id, Reply::system_text(system_prompt.clone()));
-            let Message::User {
-                content: task_blocks,
-            } = task.as_user_message()
-            else {
-                unreachable!("Task::as_user_message returns Message::User");
-            };
-            werk.append_reply(&task_id, Reply::user(&task_blocks, &HashMap::new()));
-        }
-
         loop {
             if !werk.run.is_working() || policy_violated(&policy, &werk.stats).is_some() {
                 break;
@@ -76,14 +69,27 @@ impl Agent {
                 }
                 continue;
             }
-            if self.needs_compaction(werk, &task_id, &task, &system_prompt, &policy, &tools)
+            if frozen_system_prompt.is_none() {
+                match self.create_system_prompt(werk, &task, &policy) {
+                    Ok(created) => frozen_system_prompt = Some(created),
+                    Err(error) => {
+                        self.fail_render(werk, &task_id, error);
+                        break;
+                    }
+                }
+            }
+            let system_prompt = frozen_system_prompt
+                .as_deref()
+                .expect("system prompt prepared");
+            let task = werk.get_task(&task_id).expect("claimed task exists");
+            if self.needs_compaction(werk, &task_id, &task, system_prompt, &policy, &tools)
                 && !self.compact(werk, &task_id, CompactReason::Proactive).await
             {
                 break;
             }
 
             let calls = match self
-                .request(werk, &task_id, &system_prompt, &policy, &tools)
+                .request(werk, &task_id, system_prompt, &policy, &tools)
                 .await
             {
                 Ok(Some(calls)) => calls,
@@ -113,6 +119,37 @@ impl Agent {
                 break;
             }
         }
+    }
+
+    fn create_system_prompt(
+        &self,
+        werk: &Werk,
+        task: &Task,
+        policy: &Policy,
+    ) -> Result<String, RenderError> {
+        let context_values =
+            crate::prompts::context_values(&self.get_dir(), policy, &werk.stats, &task.id);
+        let rendered_role = werk.render_prompt(self.get_role(), &context_values)?;
+        let knowledge_index = self.get_knowledge().get_index();
+        let knowledge_body = knowledge_index.trim_matches('\n');
+        let system_prompt = match (rendered_role.is_empty(), knowledge_body.is_empty()) {
+            (_, true) => rendered_role,
+            (true, false) => format!("## Knowledge\n\n{knowledge_body}"),
+            (false, false) => {
+                format!("{rendered_role}\n\n## Knowledge\n\n{knowledge_body}")
+            }
+        };
+        let initial_task_reply = if task.replies.is_empty() {
+            Some(task.initial_reply(werk)?)
+        } else {
+            None
+        };
+
+        werk.append_reply(&task.id, Reply::system_text(system_prompt.clone()));
+        if let Some(initial_task_reply) = initial_task_reply {
+            werk.append_reply(&task.id, initial_task_reply);
+        }
+        Ok(system_prompt)
     }
 
     fn run_is_over(&self, werk: &Werk) -> bool {
@@ -155,6 +192,15 @@ impl Agent {
 
     pub(super) fn emit_event(&self, werk: &Werk, task_id: &str, event: Event) -> Event {
         werk.emit_event(event.task_id(task_id).agent_id(self.get_id()))
+    }
+
+    fn fail_render(&self, werk: &Werk, task_id: &str, error: RenderError) {
+        self.emit_event(
+            werk,
+            task_id,
+            Event::prompt_render_failed(&error.expression, &error.message),
+        );
+        self.fail_task(werk, task_id);
     }
 
     pub(super) fn fail_task(&self, werk: &Werk, task_id: &str) {

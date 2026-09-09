@@ -5,7 +5,6 @@ use std::future::Future;
 use std::io;
 use std::path::PathBuf;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
@@ -99,6 +98,7 @@ fn is_failure(event: &Event) -> bool {
             | Event::TOOL_CALL_FAILED
             | Event::KNOWLEDGE_FAILED
             | Event::COMPACTION_FAILED
+            | Event::PROMPT_RENDER_FAILED
     )
 }
 
@@ -285,6 +285,7 @@ pub struct Werk {
     pub(crate) tasks: Mutex<HashMap<String, Task>>,
     pub(super) agents: Mutex<Vec<Agent>>,
     pub(super) policy: Mutex<Policy>,
+    templates: Mutex<HashMap<String, String>>,
     /// Why the run ended, once the main loop decides. The agent tasks, the
     /// tools, and every `finish` read it to know the run is over.
     pub(crate) run: Arc<Run>,
@@ -295,7 +296,7 @@ pub struct Werk {
     /// How many terminal status transitions are between their status change and
     /// the return of their event handlers. `pending` counts a non-zero value as
     /// pending work, so a handler creating a follow-up task always beats the drain.
-    pub(crate) terminal_transitions_in_flight: AtomicUsize,
+    pub(crate) terminal_transitions: watch::Sender<usize>,
     pub(crate) stats: Stats,
     pub(super) event_handlers: Mutex<Vec<Arc<EventHandler>>>,
     pub(super) awaited_events: AwaitedEvents,
@@ -324,9 +325,10 @@ impl Werk {
             tasks: Mutex::new(HashMap::new()),
             agents: Mutex::new(Vec::new()),
             policy: Mutex::new(Policy::default()),
+            templates: Mutex::new(HashMap::new()),
             run: Arc::new(Run::default()),
             cancel_filters: Mutex::new(Vec::new()),
-            terminal_transitions_in_flight: AtomicUsize::new(0),
+            terminal_transitions: watch::Sender::new(0),
             stats: Stats::new(),
             event_handlers: Mutex::new(Vec::new()),
             awaited_events: AwaitedEvents::default(),
@@ -410,9 +412,10 @@ impl Werk {
             tasks: Mutex::new(tasks),
             agents: Mutex::new(Vec::new()),
             policy: Mutex::new(Policy::default()),
+            templates: Mutex::new(HashMap::new()),
             run: Arc::new(Run::default()),
             cancel_filters: Mutex::new(Vec::new()),
-            terminal_transitions_in_flight: AtomicUsize::new(0),
+            terminal_transitions: watch::Sender::new(0),
             stats,
             event_handlers: Mutex::new(Vec::new()),
             awaited_events: AwaitedEvents::default(),
@@ -840,6 +843,34 @@ impl Werk {
         self.policy.lock().unwrap().clone()
     }
 
+    /// Insert or replace a shared template value. New tasks use it before their first request.
+    pub fn set_template(&self, key: impl Into<String>, value: impl Into<String>) -> &Self {
+        self.templates
+            .lock()
+            .unwrap()
+            .insert(key.into(), value.into());
+        self
+    }
+
+    /// Insert or replace several shared values together.
+    pub fn set_templates<I, K, V>(&self, variables: I) -> &Self
+    where
+        I: IntoIterator<Item = (K, V)>,
+        K: Into<String>,
+        V: Into<String>,
+    {
+        let values: Vec<_> = variables
+            .into_iter()
+            .map(|(k, v)| (k.into(), v.into()))
+            .collect();
+        self.templates.lock().unwrap().extend(values);
+        self
+    }
+
+    pub(crate) fn template_values(&self) -> HashMap<String, String> {
+        self.templates.lock().unwrap().clone()
+    }
+
     /// Define where a session is stored, `./.agentwerk` by default.
     ///
     /// Loading knowledge from `<dir>/knowledge` keeps its pages beside the
@@ -862,9 +893,8 @@ impl Werk {
 
     /// Submit a task and return its task ID.
     ///
-    /// A string is the task itself, and a `&Path` or `PathBuf` names the file
-    /// holding it. A [`Task`] carries a custom label or
-    /// schema with it. ID, reporter, creation time, status, and result are set
+    /// A string is the task itself. A [`Task`] carries a custom label or schema
+    /// with it. ID, reporter, creation time, status, and result are set
     /// at insertion and overwrite whatever the task carried. A label decides
     /// which agents may claim it, so give an agent a label of its own to
     /// address it alone.
@@ -1140,7 +1170,7 @@ impl Werk {
             Origin::Task => {
                 // A terminal transition mid-flight may still add a follow-up task
                 // from a handler, so it counts as work whatever the store says.
-                if self.terminal_transitions_in_flight.load(Ordering::SeqCst) > 0 {
+                if *self.terminal_transitions.borrow() > 0 {
                     return true;
                 }
                 let interactive = self.interactive_agents();
@@ -1164,7 +1194,7 @@ impl Werk {
         if ids.is_empty() {
             return false;
         }
-        if self.terminal_transitions_in_flight.load(Ordering::SeqCst) > 0 {
+        if *self.terminal_transitions.borrow() > 0 {
             return true;
         }
         let interactive = self.interactive_agents();
@@ -1218,7 +1248,7 @@ impl Werk {
     fn anything_pending(&self) -> bool {
         // A terminal transition mid-flight may still add a follow-up task
         // from a handler, so it counts as work whatever the store says.
-        self.terminal_transitions_in_flight.load(Ordering::SeqCst) > 0 || self.anything_claimable()
+        *self.terminal_transitions.borrow() > 0 || self.anything_claimable()
     }
 
     /// True while the main loop is up. `start()` is a no-op then, so a second
@@ -1240,7 +1270,8 @@ impl Werk {
     }
 
     /// Attach `agent` to this Werk, moving any tasks it queued in its own
-    /// private Werk across first. The prior Werk is freed once nothing else
+    /// private Werk across first, importing templates for keys not already defined.
+    /// The prior Werk is freed once nothing else
     /// holds it.
     pub(crate) fn bind_agent(&self, agent: &mut Agent) {
         agent.require_provider_and_model();
@@ -1253,6 +1284,13 @@ impl Werk {
                     .upgrade()
                     .expect("self Arc dropped during bind"),
             ) {
+                let templates = prior.template_values();
+                {
+                    let mut shared = self.templates.lock().unwrap();
+                    for (key, value) in templates {
+                        shared.entry(key).or_insert(value);
+                    }
+                }
                 let drained: Vec<Task> = {
                     let mut old = prior.tasks.lock().unwrap();
                     std::mem::take(&mut *old).into_values().collect()
@@ -1285,7 +1323,8 @@ impl Werk {
 
     /// Add an agent to this Werk.
     ///
-    /// Any tasks the agent queued on its own move into this Werk. An agent
+    /// Import missing templates and move the agent's queued tasks into this Werk.
+    /// Existing shared templates win when keys overlap. An agent
     /// added while execution is under way picks up its first task within
     /// about 100 ms.
     pub fn add_agent(&self, mut agent: Agent) -> &Self {
@@ -1365,11 +1404,12 @@ impl Werk {
             self.start();
         }
         let mut stream = self.event_stream.subscribe();
+        let mut transitions = self.terminal_transitions.subscribe();
         while snapshot
             .as_ref()
             .map_or_else(|| self.pending(&query), |ids| self.pending_ids(ids))
         {
-            let ended = self.next_event_or_end(&mut stream).await;
+            let ended = self.next_event_or_end(&mut stream, &mut transitions).await;
             self.await_handlers().await;
             if ended {
                 break;
@@ -1459,11 +1499,16 @@ impl Werk {
     /// event arriving between two reads of the store is never missed. It waits
     /// for the ending to be complete rather than begun, so a caller that starts
     /// another run never overlaps the previous one.
-    async fn next_event_or_end(&self, stream: &mut broadcast::Receiver<Event>) -> bool {
+    async fn next_event_or_end(
+        &self,
+        stream: &mut broadcast::Receiver<Event>,
+        transitions: &mut watch::Receiver<usize>,
+    ) -> bool {
         tokio::select! {
             // A lagging reader misses events rather than the run stalling to
             // wait for it, so only a closed channel ends the wait.
             received = stream.recv() => matches!(received, Err(broadcast::error::RecvError::Closed)),
+            _ = transitions.changed() => false,
             _ = self.run.until_finished() => true,
         }
     }
@@ -1507,7 +1552,7 @@ impl Werk {
             .and_then(|task| task.result)
     }
 
-    fn result_tasks(&self, matches: impl Matcher<Task>) -> Vec<Task> {
+    pub(crate) fn result_tasks(&self, matches: impl Matcher<Task>) -> Vec<Task> {
         let query = matches
             .into_query()
             .task_if_originless()
@@ -1519,6 +1564,8 @@ impl Werk {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::super::test_util::*;
     use super::*;
 
@@ -3203,6 +3250,35 @@ mod tests {
         // The handler ran inside `set_finished_by`, so the Werk is never
         // observably empty between the task finishing and the follow-up.
         assert!(werk.pending(&Query::all()));
+    }
+
+    #[test]
+    fn terminal_transition_count_tracks_overlapping_handlers() {
+        let (werk, _tmp) = test_werk();
+        let first = werk.add_task("first");
+        let second = werk.add_task("second");
+        let (handler_entered, entered_handlers) = std::sync::mpsc::channel();
+        let release_handlers = Arc::new(std::sync::Barrier::new(3));
+        let handler_release = Arc::clone(&release_handlers);
+        werk.on_failure(move |_, _, _| {
+            handler_entered.send(()).unwrap();
+            handler_release.wait();
+        });
+
+        let first_werk = Arc::clone(&werk);
+        let first_failure = std::thread::spawn(move || first_werk.set_task_failed(&first).unwrap());
+        let second_werk = Arc::clone(&werk);
+        let second_failure =
+            std::thread::spawn(move || second_werk.set_task_failed(&second).unwrap());
+
+        entered_handlers.recv().unwrap();
+        entered_handlers.recv().unwrap();
+        assert_eq!(*werk.terminal_transitions.borrow(), 2);
+
+        release_handlers.wait();
+        first_failure.join().unwrap();
+        second_failure.join().unwrap();
+        assert_eq!(*werk.terminal_transitions.borrow(), 0);
     }
 
     #[test]

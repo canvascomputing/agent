@@ -1,4 +1,4 @@
-//! Exposes tasks for both submission and inspection through Python.
+//! Exposes tasks for both creation and inspection through Python.
 //!
 //! Rust sets those fields with chained methods. A Python class cannot carry a
 //! `label` method and a `label` attribute, so they are keyword arguments here.
@@ -6,19 +6,13 @@
 use agentwerk::Task;
 use pyo3::prelude::*;
 
-use crate::convert::{py_to_text, py_to_value, value_to_py};
+use crate::convert::{py_to_value, value_to_py};
 use crate::schema::PySchema;
 
-/// Read a Python argument as a task: a `Task`, an `os.PathLike` naming the
-/// file holding the task, or any value as the task itself.
-///
-/// A `str` stays the task, since a task naming a file is still a task.
+/// Read a Python argument as a task or any JSON-compatible task value.
 pub fn to_task(arg: &Bound<'_, PyAny>) -> PyResult<Task> {
     if let Ok(task) = arg.extract::<PyRef<'_, PyTask>>() {
         return Ok(task.to_task());
-    }
-    if arg.hasattr("__fspath__")? {
-        return Ok(Task::new(py_to_text(arg)?));
     }
     Ok(Task::new(py_to_value(arg)?))
 }
@@ -172,19 +166,8 @@ impl PyTask {
         }
     }
 
-    /// Build the task to submit, copying only the fields you own.
-    ///
-    /// Submitting sets ID, status, reporter, and result, but leaves the
-    /// messages and timestamps, so a task that came back out of the Werk
-    /// would otherwise carry its messages into the new one.
+    /// Preserve task input; `add_task` clears execution-owned fields in Rust.
     pub fn to_task(&self) -> Task {
-        let mut task = Task::new(self.inner.get_task().clone());
-        if let Some(label) = self.inner.get_label() {
-            task = task.label(label);
-        }
-        if let Some(schema) = self.inner.get_schema() {
-            task = task.schema(schema.clone());
-        }
-        task
+        self.inner.clone()
     }
 }

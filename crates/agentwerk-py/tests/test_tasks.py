@@ -21,14 +21,12 @@ def test_enqueued_task_appears_with_its_status_and_label(werk):
     assert task.get_label() == "scan"
 
 
-def test_a_path_task_is_read_from_the_file(werk, tmp_path):
+def test_a_path_task_is_rejected(werk, tmp_path):
     task = tmp_path / "task.md"
     task.write_text("scan the corpus\n")
 
-    werk.add_task(task)
-
-    (task,) = werk.get_tasks()
-    assert task.get_task() == "scan the corpus"
+    with pytest.raises(ValueError):
+        werk.add_task(task)
 
 
 def test_a_string_task_stays_the_string_even_when_it_names_a_file(werk, tmp_path):

@@ -1,22 +1,19 @@
 //! Assembles what an agent is told: the role, the directives, and the facts
 //! `{context}` expands to.
 
-mod builder;
 pub(crate) mod directives;
-mod section;
-pub(crate) mod text;
+mod prompt;
 
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-pub(crate) use builder::PromptBuilder;
 use directives::{
     built_in, DirectiveStore, ARGUMENTS_EXPECTED, ARGUMENTS_REJECTED, RESULT_SCHEMA_REQUIRED,
     SUMMARY_REQUESTED,
 };
-pub(crate) use text::Text;
+pub(crate) use prompt::RenderError;
 
 use crate::agents::policy::Policy;
 use crate::agents::stats::Stats;
@@ -65,10 +62,7 @@ pub(crate) fn arguments_retry_detail(
     format!("{rejected}\n\n{expected}")
 }
 
-/// Every fact the context knows, as `(placeholder, value)`. An unlimited
-/// budget carries an empty value, which drops its bullet in
-/// [`render_context`]. Pass `Policy::default()` and `Stats::new()` for the
-/// static facts alone.
+/// Build the runtime string values available while an agent's role is rendered.
 pub(crate) fn context_values(
     dir: &Path,
     policy: &Policy,
@@ -80,34 +74,41 @@ pub(crate) fn context_values(
         .output()
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
-    let turns = policy
-        .max_turns
-        .map(|limit| u64::from(limit).saturating_sub(stats.event_count(Event::TURN_STARTED)));
-    let input_tokens = policy
-        .max_input_tokens
-        .map(|limit| limit.saturating_sub(stats.input_tokens()));
-    let output_tokens = policy
-        .max_output_tokens
-        .map(|limit| limit.saturating_sub(stats.output_tokens()));
-    let time = policy.max_time.zip(stats.execution_duration());
-    vec![
+    let turns = optional(
+        policy
+            .max_turns
+            .map(|limit| u64::from(limit).saturating_sub(stats.event_count(Event::TURN_STARTED))),
+    );
+    let input_tokens = optional(
+        policy
+            .max_input_tokens
+            .map(|limit| limit.saturating_sub(stats.input_tokens())),
+    );
+    let output_tokens = optional(
+        policy
+            .max_output_tokens
+            .map(|limit| limit.saturating_sub(stats.output_tokens())),
+    );
+    let time = optional(
+        policy
+            .max_time
+            .zip(stats.execution_duration())
+            .map(|(limit, elapsed)| format!("{}s", limit.saturating_sub(elapsed).as_secs())),
+    );
+    let mut values = vec![
         ("task_id", task_id.to_string()),
         ("date", format_current_date()),
         ("dir", dir.display().to_string()),
         ("platform", std::env::consts::OS.to_string()),
         ("os_version", os_version),
-        ("turns_remaining", optional(turns)),
-        ("input_tokens_remaining", optional(input_tokens)),
-        ("output_tokens_remaining", optional(output_tokens)),
-        (
-            "time_remaining",
-            optional(
-                time.map(|(limit, elapsed)| {
-                    format!("{}s", limit.saturating_sub(elapsed).as_secs())
-                }),
-            ),
-        ),
-    ]
+        ("turns_remaining", turns),
+        ("input_tokens_remaining", input_tokens),
+        ("output_tokens_remaining", output_tokens),
+        ("time_remaining", time),
+    ];
+    let context = render_context(&values);
+    values.push(("context", context));
+    values
 }
 
 /// An unset budget renders as no value at all, never as a bare `0`.
@@ -115,28 +116,24 @@ fn optional(value: Option<impl ToString>) -> String {
     value.map(|v| v.to_string()).unwrap_or_default()
 }
 
-/// Build the bullet list `{context}` expands to. Every label lives in
-/// `context.md`; a line whose placeholders all came back empty is left out, so
-/// an unconfigured budget shows no bullet. One empty value next to a filled one
-/// keeps the line: a failed `uname` still leaves a platform.
-pub(crate) fn render_context(values: &[(&'static str, String)]) -> String {
-    let lines: Vec<String> = CONTEXT_TEMPLATE
+fn render_context(values: &[(&str, String)]) -> String {
+    CONTEXT_TEMPLATE
         .trim_matches('\n')
         .lines()
         .filter_map(|line| {
             let mut rendered = line.to_string();
-            let mut carries_value = false;
+            let mut has_value = false;
             for (name, value) in values {
                 let placeholder = format!("{{{name}}}");
                 if rendered.contains(&placeholder) {
-                    carries_value |= !value.is_empty();
+                    has_value |= !value.is_empty();
                     rendered = rendered.replace(&placeholder, value);
                 }
             }
-            carries_value.then(|| rendered.trim_end().to_string())
+            has_value.then_some(rendered)
         })
-        .collect();
-    lines.join("\n")
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Today's date as `YYYY-MM-DD`, via the civil-from-days algorithm.
@@ -254,7 +251,11 @@ mod tests {
         stats: &Stats,
         task_id: &str,
     ) -> String {
-        render_context(&context_values(dir, policy, stats, task_id))
+        context_values(dir, policy, stats, task_id)
+            .into_iter()
+            .find(|(key, _)| *key == "context")
+            .map(|(_, value)| value)
+            .unwrap()
     }
 
     #[test]

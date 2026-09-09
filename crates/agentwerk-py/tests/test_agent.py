@@ -29,15 +29,15 @@ def test_chaining_returns_the_same_agent():
     assert agent.role("r").label("x").dir(".") is agent
 
 
-def test_role_reads_a_path_as_the_file_holding_it(tmp_path):
+def test_role_accepts_file_contents_read_by_the_caller(tmp_path):
     role = tmp_path / "reviewer.md"
     role.write_text("You review code.\n")
     agent = aw.Agent()
-    assert agent.role(role) is agent
+    assert agent.role(role.read_text()) is agent
 
 
-def test_role_naming_a_missing_file_is_rejected(tmp_path):
-    with pytest.raises(RuntimeError):
+def test_role_rejects_path_like_input(tmp_path):
+    with pytest.raises(TypeError):
         aw.Agent().role(tmp_path / "absent.md")
 
 
@@ -118,7 +118,7 @@ def test_add_task_uses_the_shared_werk_after_binding(offline_agent, werk):
     id = offline_agent.add_task("check {topic}")
 
     assert id.startswith("t-")
-    assert werk.get_task(id).get_task() == "check parity"
+    assert werk.get_task(id).get_task() == "check {topic}"
 
 
 def test_agent_task_is_not_a_compatibility_alias():

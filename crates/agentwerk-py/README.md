@@ -123,8 +123,8 @@ The [prompt skill](../../skills/prompt/SKILL.md) provides a compact template for
 | | `tools(tools)` | Register several tools the agent may call. |
 | | `label(label)` | Restrict the agent to tasks carrying this label. |
 | | `dir(dir)` | Set the directory the agent has access to. |
-| | `template(key, value)` | Inject data into prompts with template strings. |
-| | `templates(variables)` | Inject more than one entry into prompts. |
+| | `template(key, value)` | Set a shared template. |
+| | `templates(variables)` | Set several shared templates together. |
 | | `directive(key, template)` | Set a directive template by key. |
 | | `directives(overrides)` | Set more than one directive template. |
 | | `knowledge(store)` | Share a knowledge store with the agent. |
@@ -457,7 +457,7 @@ See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/struct.Task.html).
 Agents can pass work and results in five ways:
 
 1. **Result hook**: `on_result` creates follow-up tasks from completed work.
-2. **Template variables**: `template` injects a result into another agent's prompt.
+2. **Template values**: fill placeholders with shared values or AQL-selected results.
 3. **Knowledge**: the `knowledge` tool shares durable pages between agents.
 4. **Task tool**: the `task` tool reads any finished task's result by ID.
 5. **Read result file**: the `read_file` tool opens a task's `result.json` in the session directory.
@@ -478,19 +478,39 @@ def hand_to_report(werk, done, result):
 werk.on_result(hand_to_report)
 ```
 
-#### 2. Template variables
+#### 2. Template values
 
-Inject a result into the next agent's role or text task:
+Define an agent with placeholders, then set the template values before adding its task:
 
 ```python
-writer = (
-    Agent.from_env()
-    .role("Use this research:\n{research}")
-    .template("research", research)
-)
+from agentwerk import Agent, Task
 
-writer.add_task("Write the board report.")
+werk.add_agent(
+    Agent.from_env()
+    .label("report")
+    .role("Write for {company} using:\n{results: research}")
+)
+werk.set_template("company", "Canvas Computing")
+await werk.finish_tasks("research")
+werk.add_task(Task("Write the board report.", label="report"))
 ```
+
+agentwerk fills placeholders in the role and task just before each task's first model request. Newly added tasks use the latest template values and results.
+
+<details>
+<summary>Template reference</summary>
+
+| Expression | Output |
+|---|---|
+| `{name}` | The value assigned to `name`. |
+| `{result: AQL}` | The first result; strings as text, other values as compact JSON. |
+| `{results: AQL}` | A compact JSON array of matching results. |
+| `{result_path: AQL}` | The absolute path of the first matching result file. |
+| `{result_paths: AQL}` | A JSON array of absolute result file paths. |
+
+Use `{{` and `}}` to include literal braces.
+
+</details>
 
 #### 3. Knowledge
 
@@ -813,7 +833,7 @@ web = FetchTool().impersonate()
 
 Use `concurrent=True` when a custom tool has no side effects and may run in parallel with other calls.
 
-Agentwerk uses type annotations to tell the model which arguments it can pass.
+agentwerk uses type annotations to tell the model which arguments it can pass.
 Arguments without default values are required. It understands lists,
 dictionaries, tuples, `Literal`, `Optional`, and unions. Use `schema=` when
 annotations are not enough.
@@ -864,6 +884,7 @@ werk.on_event(log)
 | **LLM provider** | `request_started` | A request went out to the model. |
 | | `request_finished` | A request finished and reported its token usage. |
 | | `request_failed` | A request failed and was not retried. |
+| | `prompt_render_failed` | A role or task expression could not render before its request. |
 | | `request_retried` | A temporary LLM provider error triggered a retry. |
 | | `text_chunk_received` | Part of the reply arrived. |
 | **Tool** | `tool_call_declined` | A tool call proposed by the model was declined. |

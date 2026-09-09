@@ -13,7 +13,6 @@ pub(crate) use crate::event::Event;
 use crate::prompts::directives::{
     DirectiveStore, ARGUMENTS_REJECTED, TOOL_OUTPUT_EMPTY, TOOL_OUTPUT_OFFLOADED, TOOL_TIMED_OUT,
 };
-use crate::prompts::Text;
 use crate::providers::ContentBlock;
 use crate::schemas::Schema;
 
@@ -340,11 +339,8 @@ impl Tool {
     }
 
     /// Say what the tool does, in the words the model reads.
-    ///
-    /// A string is the description itself; a `&Path` or `PathBuf` names the
-    /// file holding it, which panics when that file cannot be read.
-    pub fn description(mut self, description: impl Into<Text>) -> Self {
-        self.description = Some(description.into().into_string());
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into().trim().to_string());
         self
     }
 
@@ -1173,12 +1169,13 @@ mod tests {
     }
 
     #[test]
-    fn a_description_named_by_a_path_is_read_from_that_file() {
+    fn a_description_can_be_read_by_the_caller() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let file = dir.path().join("demo.tool.md");
         std::fs::write(&file, "Do the demo thing.\n").unwrap();
+        let description = std::fs::read_to_string(file).unwrap();
         let tool = Tool::new("demo")
-            .description(file.as_path())
+            .description(description)
             .handler(|_: Value| async { Event::success("") });
         assert_eq!(tool.get_description(), "Do the demo thing.");
     }

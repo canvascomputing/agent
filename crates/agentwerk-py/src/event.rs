@@ -32,6 +32,8 @@ impl PyEvent {
     #[classattr]
     const REQUEST_FINISHED: &'static str = Event::REQUEST_FINISHED;
     #[classattr]
+    const PROMPT_RENDER_FAILED: &'static str = Event::PROMPT_RENDER_FAILED;
+    #[classattr]
     const REQUEST_FAILED: &'static str = Event::REQUEST_FAILED;
     #[classattr]
     const REQUEST_RETRIED: &'static str = Event::REQUEST_RETRIED;
@@ -142,6 +144,13 @@ impl PyEvent {
                 "usage": py_to_value(usage)?,
             })),
         })
+    }
+
+    #[staticmethod]
+    fn prompt_render_failed(expression: &str, message: &str) -> Self {
+        Self {
+            inner: Event::prompt_render_failed(expression, message),
+        }
     }
 
     #[staticmethod]
