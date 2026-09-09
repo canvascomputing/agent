@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::agents::agent::Agent;
+use crate::agents::knowledge::Knowledge;
 use crate::agents::policy::Policy;
 use crate::agents::tasks::{Task, Werk};
 use crate::event::Event;
@@ -316,6 +317,8 @@ pub async fn run_one(
     };
 
     let results_dir = crate::test_util::TempDir::new().unwrap();
+    let knowledge_dir = crate::test_util::TempDir::new().unwrap();
+    let knowledge = Knowledge::load(knowledge_dir.path()).unwrap();
     let werk = Werk::new();
     werk.set_dir(results_dir.path().to_path_buf())
         .set_policy(Policy {
@@ -332,6 +335,7 @@ pub async fn run_one(
             .provider(provider.clone())
             .model("mock")
             .role("test")
+            .knowledge(&knowledge)
             .tool(TaskTool),
     );
 
