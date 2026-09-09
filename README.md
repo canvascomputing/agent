@@ -170,7 +170,7 @@ See [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Age
 
 ### Providers
 
-An LLM provider connects agents to Anthropic, OpenAI, Mistral, or a LiteLLM proxy.
+Connect agents to Anthropic, OpenAI, Mistral, or a LiteLLM proxy.
 
 ```rust
 use agentwerk::providers::Anthropic;
@@ -271,13 +271,13 @@ werk.add_task(Task::labeled("report", "Write up the ranking."));
 | | `set_task_finished(id, result)` | Finish a task with a result. |
 | | `set_task_failed(id)` | Fail a task. |
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
-| | `on_event_async(handler)` | Read every event in an async handler. |
+| | `on_event_async(handler)` | Read every event in an async hook. |
 | | `on_result(handler)` | Read every finished task together with its result. |
-| | `on_result_async(handler)` | Read every finished task and result in an async handler. |
+| | `on_result_async(handler)` | Read every finished task and result in an async hook. |
 | | `on_failure(handler)` | Read every failure together with its task. |
-| | `on_failure_async(handler)` | Read every failure and task in an async handler. |
+| | `on_failure_async(handler)` | Read every failure and task in an async hook. |
 | | `on_task(handler)` | Read task state changes. |
-| | `on_task_async(handler)` | Read task state changes in an async handler. |
+| | `on_task_async(handler)` | Read task state changes in an async hook. |
 | **Run** | `start()` | Keep processing tasks in the background. |
 | | `finish_task(query)` | Wait for all matches and return the first result in query order. |
 | | `finish_tasks(query)` | Wait for matching tasks and get their results. |
@@ -440,10 +440,10 @@ See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/struct.Task.html).
 Agents can pass work and results in five ways:
 
 1. **Result hook**: `on_result` creates follow-up tasks from completed work.
-2. **Template values**: fill placeholders with shared values or AQL-selected results.
-3. **Knowledge**: the `knowledge` tool shares durable pages between agents.
-4. **Task tool**: the `task` tool reads any finished task's result by ID.
-5. **Read result file**: the `read_file` tool opens a task's `result.json` in the session directory.
+2. **Template values**: enrich prompts with template strings or AQL-selected results.
+3. **KnowledgeTool**: shares durable pages between agents.
+4. **TaskTool**: reads any finished task's result by ID.
+5. **ReadFileTool**: opens a task's `result.json` in the session directory.
 
 <details>
 <summary>Result-sharing examples</summary>
@@ -519,7 +519,7 @@ Results such as `{"title":"Market","updates":["one","two"]}` render as:
 
 Nulls and empty collections do not appear.
 
-#### 3. Knowledge
+#### 3. KnowledgeTool
 
 Hand both agents one store, and either can write a page the other reads:
 
@@ -532,7 +532,7 @@ let writer = Agent::from_env().label("report").knowledge(&store);
 analyst.add_task("Rank the products by value, then save the ranking to your knowledge.");
 ```
 
-#### 4. Task tool
+#### 4. TaskTool
 
 Give the writer `TaskTool`, and it reads what any finished task produced, by ID:
 
@@ -544,7 +544,7 @@ let writer = Agent::from_env()
 writer.add_task("Read the result of t-1, then write the board report.");
 ```
 
-#### 5. Read result file
+#### 5. ReadFileTool
 
 Give the writer `ReadFileTool` instead, and it opens the result file named at the end of its task:
 
@@ -771,10 +771,10 @@ let patient_fetch = FetchTool::new().timeout(Duration::ZERO);
 
 | Tool | Default timeout |
 |------|-----------------|
-| Custom tools | None |
 | `FetchTool` | 60 seconds |
 | `GrepTool` | 180 seconds |
 | `CommandTool` | The call's `timeout_ms`, or 120 seconds if omitted |
+| All other tools | None |
 
 #### EventTool
 
@@ -795,7 +795,7 @@ The model supplies a name and optional JSON data:
 }
 ```
 
-Events carry the current task and agent context; see [Events](#events) for handlers and queries. Names are unrestricted; lowercase snake case is conventional.
+Events carry the current task and agent context; see [Events](#events) for hooks and queries. Names are unrestricted; lowercase snake case is conventional.
 
 Only `task_finished` completes the current task. Its `data` is the result object:
 
@@ -869,20 +869,17 @@ See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 
 ## Events
 
-Events record what agents, tools, and LLM providers do during execution.
+Events provide detailed observability into agent behavior during execution. Register hooks to react to every event, finished result, failure, or task state change:
 
 ```rust
-use agentwerk::Event;
-
-werk.on_event(|_, event| {
-    if event.get_name() == Event::TASK_FINISHED {
-        eprintln!("{}", event.get_data()["answer"]);
-    }
-});
+werk.on_event(|_, event| eprintln!("event: {}", event.get_name()));
+werk.on_result(|_, task, result| println!("{}: {result}", task.get_id()));
+werk.on_failure(|_, event, task| eprintln!("{}: {}", task.get_id(), event.get_name()));
+werk.on_task(|_, event, task| eprintln!("{}: {}", task.get_id(), event.get_name()));
 ```
 
 <details>
-<summary>Event reference</summary>
+<summary>Event and hook reference</summary>
 
 #### Event names
 
@@ -941,7 +938,7 @@ werk.emit_event(Event::new("index_refreshed"));
 
 #### Read events
 
-Events are saved to `.agentwerk/events.jsonl`, except `text_chunk_received`. These streamed fragments reach handlers but are not available to event queries.
+Events are saved to `.agentwerk/events.jsonl`, except `text_chunk_received`. These streamed fragments reach hooks but are not available to event queries.
 
 | Method | Description |
 |--------|-------------|
@@ -963,7 +960,7 @@ Events are saved to `.agentwerk/events.jsonl`, except `text_chunk_received`. The
 | `directive(value)` | Set directive metadata; this does not send an instruction to the model. |
 | `get_directive()` | Read the directive metadata. |
 
-When no event handler is installed, `event::default_logger()` logs events.
+When no event hook is installed, `event::default_logger()` logs events.
 
 #### Query events
 
@@ -989,63 +986,22 @@ Use `IS EMPTY` to find events without agent, task, or label context. `event.data
 
 See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html) and [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
 
-</details>
-
-### Hooks
-
-A hook runs your function when an event, result, failure, or task state change occurs.
-
-```rust
-werk.on_failure(|werk, _, failed| {
-    if failed.get_label() == Some("scan") {
-        werk.add_task(Task::labeled("triage", failed.get_task().clone()));
-    }
-});
-```
-
-<details>
-<summary>Hook reference</summary>
+#### Hooks
 
 | | Method | Description |
 |-|--------|-------------|
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
-| | `on_event_async(handler)` | Read every event in an async handler. |
+| | `on_event_async(handler)` | Read every event in an async hook. |
 | | `on_result(handler)` | Read every finished task together with its result. |
-| | `on_result_async(handler)` | Read every finished task and result in an async handler. |
+| | `on_result_async(handler)` | Read every finished task and result in an async hook. |
 | | `on_failure(handler)` | Read every failure together with its task. |
-| | `on_failure_async(handler)` | Read every failure and task in an async handler. |
+| | `on_failure_async(handler)` | Read every failure and task in an async hook. |
 | | `on_task(handler)` | Read task state changes. |
-| | `on_task_async(handler)` | Read task state changes in an async handler. |
-
-Save replies of every finished task as a training example:
-
-```rust
-werk.on_task(|werk, event, task| {
-    if event.get_name() == Event::TASK_FINISHED {
-        let model = werk.get_model_for_agent(event.get_agent_id());
-        let _ = Trajectory::from_task(event.get_agent_id(), model.as_deref(), task)
-            .save("datasets");
-    }
-});
-```
-
-#### Async handlers
+| | `on_task_async(handler)` | Read task state changes in an async hook. |
 
 `on_result` runs synchronously on the agent; keep it brief. Use `on_result_async` for work that needs to await.
 
 Async hooks run while a completion method is waiting, and finish before it returns. `start()` alone does not run them. Do not call `finish`, `finish_task`, or `finish_tasks` inside an async hook: it can deadlock.
-
-```rust
-let findings = Arc::clone(&database);
-werk.on_result_async(move |_, task, result| {
-    let findings = Arc::clone(&findings);
-    async move {
-        let _ = findings.insert(task.get_id(), &result).await;
-    }
-});
-```
-
-See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
 
 </details>
 

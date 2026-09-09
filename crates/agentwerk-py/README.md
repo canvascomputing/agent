@@ -181,7 +181,7 @@ See [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Age
 
 ### Providers
 
-An LLM provider connects agents to Anthropic, OpenAI, Mistral, or a LiteLLM proxy.
+Connect agents to Anthropic, OpenAI, Mistral, or a LiteLLM proxy.
 
 ```python
 from agentwerk import Agent, Anthropic
@@ -286,13 +286,13 @@ werk.add_task(Task("Write up the ranking.", label="report"))
 | | `set_task_finished(id, result)` | Finish a task with a result. |
 | | `set_task_failed(id)` | Fail a task. |
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
-| | `on_event_async(handler)` | Read every event in an async handler. |
+| | `on_event_async(handler)` | Read every event in an async hook. |
 | | `on_result(handler)` | Read every finished task together with its result. |
-| | `on_result_async(handler)` | Read every finished task and result in an async handler. |
+| | `on_result_async(handler)` | Read every finished task and result in an async hook. |
 | | `on_failure(handler)` | Read every failure together with its task. |
-| | `on_failure_async(handler)` | Read every failure and task in an async handler. |
+| | `on_failure_async(handler)` | Read every failure and task in an async hook. |
 | | `on_task(handler)` | Read task state changes. |
-| | `on_task_async(handler)` | Read task state changes in an async handler. |
+| | `on_task_async(handler)` | Read task state changes in an async hook. |
 | **Run** | `start()` | Keep processing tasks in the background. |
 | | `finish_task(query)` | Wait for all matches and return the first result in query order. |
 | | `finish_tasks(query)` | Wait for matching tasks and get their results. |
@@ -457,10 +457,10 @@ See [`Task`](https://docs.rs/agentwerk/latest/agentwerk/struct.Task.html).
 Agents can pass work and results in five ways:
 
 1. **Result hook**: `on_result` creates follow-up tasks from completed work.
-2. **Template values**: fill placeholders with shared values or AQL-selected results.
-3. **Knowledge**: the `knowledge` tool shares durable pages between agents.
-4. **Task tool**: the `task` tool reads any finished task's result by ID.
-5. **Read result file**: the `read_file` tool opens a task's `result.json` in the session directory.
+2. **Template values**: enrich prompts with template strings or AQL-selected results.
+3. **KnowledgeTool**: shares durable pages between agents.
+4. **TaskTool**: reads any finished task's result by ID.
+5. **ReadFileTool**: opens a task's `result.json` in the session directory.
 
 <details>
 <summary>Result-sharing examples</summary>
@@ -540,7 +540,7 @@ Results such as `{"title":"Market","updates":["one","two"]}` render as:
 
 Nulls and empty collections do not appear.
 
-#### 3. Knowledge
+#### 3. KnowledgeTool
 
 Hand both agents one store, and either can write a page the other reads:
 
@@ -553,9 +553,9 @@ writer = Agent.from_env().label("report").knowledge(store)
 analyst.add_task("Rank the products by value, then save the ranking to your knowledge.")
 ```
 
-#### 4. Task tool
+#### 4. TaskTool
 
-Give the writer `TaskTool()`, and it reads what any finished task produced, by ID:
+Give the writer `TaskTool`, and it reads what any finished task produced, by ID:
 
 ```python
 writer = Agent.from_env().label("report").tool(TaskTool())
@@ -563,9 +563,9 @@ writer = Agent.from_env().label("report").tool(TaskTool())
 writer.add_task("Read the result of t-1, then write the board report.")
 ```
 
-#### 5. Read result file
+#### 5. ReadFileTool
 
-Give the writer `ReadFileTool()` instead, and it opens the result file named at the end of its task:
+Give the writer `ReadFileTool` instead, and it opens the result file named at the end of its task:
 
 ```python
 writer = Agent.from_env().label("report").tool(ReadFileTool())
@@ -747,7 +747,7 @@ agent = (
 
 ### FinishTool
 
-Agents use `FinishTool()` to end their task and share their outcomes:
+Agents use `FinishTool` to end their task and share their outcomes:
 
 ```json
 {
@@ -756,27 +756,27 @@ Agents use `FinishTool()` to end their task and share their outcomes:
 }
 ```
 
-To return an object result, the agent must call `FinishTool()`. If the task has a result schema, the tool validates the object against it. For a non-interactive task without a schema, the agent can instead finish by responding with plain text.
+To return an object result, the agent must call `FinishTool`. If the task has a result schema, the tool validates the object against it. For a non-interactive task without a schema, the agent can instead finish by responding with plain text.
 
-[Interactive agents](#interactive) are the exception: they have no `FinishTool()` unless you add one explicitly with `.tool(FinishTool())`.
+[Interactive agents](#interactive) are the exception: they have no `FinishTool` unless you add one explicitly with `.tool(FinishTool())`.
 
 <details>
 <summary>Tool reference</summary>
 
 | | Tool | Description |
 |-|------|-------------|
-| **File** | `ReadFileTool()` | Read a file with line numbers, offset, and limit. |
-| | `WriteFileTool()` | Create or overwrite a file. |
-| | `EditFileTool()` | Replace text in a file. |
-| **Search** | `GlobTool()` | Find files by pattern. |
-| | `GrepTool()` | Search file contents by regular expression, or by code shape with `syntax: "code"`. |
-| | `ListDirectoryTool()` | List files and directories. |
-| **Command** | `CommandTool(name)` | Give access to specific commands. |
-| **Web** | `FetchTool()` | Fetch a URL and read its body. |
-| **Events** | `EventTool()` | Publish an event. `task_finished` also completes the current task. |
-| **Tasks** | `FinishTool()` | Write the result for the current task and mark it finished. |
-| | `TaskTool()` | Read the Werk and create or edit tasks. |
-| **Knowledge** | `KnowledgeTool(store)` | Write, read, remove, or list pages in a knowledge store. |
+| **File** | `ReadFileTool` | Read a file with line numbers, offset, and limit. |
+| | `WriteFileTool` | Create or overwrite a file. |
+| | `EditFileTool` | Replace text in a file. |
+| **Search** | `GlobTool` | Find files by pattern. |
+| | `GrepTool` | Search file contents by regular expression, or by code shape with `syntax: "code"`. |
+| | `ListDirectoryTool` | List files and directories. |
+| **Command** | `CommandTool` | Give access to specific commands. |
+| **Web** | `FetchTool` | Fetch a URL and read its body. |
+| **Events** | `EventTool` | Publish an event. `task_finished` also completes the current task. |
+| **Tasks** | `FinishTool` | Write the result for the current task and mark it finished. |
+| | `TaskTool` | Read the Werk and create or edit tasks. |
+| **Knowledge** | `KnowledgeTool` | Write, read, remove, or list pages in a knowledge store. |
 
 #### Timeouts
 
@@ -791,16 +791,16 @@ patient_fetch = FetchTool().timeout(0)
 
 | Tool | Default timeout |
 |------|-----------------|
-| Custom tools | None |
 | `FetchTool` | 60 seconds |
 | `GrepTool` | 180 seconds |
 | `CommandTool` | The call's `timeout_ms`, or 120 seconds if omitted |
+| All other tools | None |
 
 When a Python tool times out, the agent stops waiting, but its worker thread may continue in the background.
 
 #### EventTool
 
-Give an agent `EventTool()` to let it publish custom events:
+Give an agent `EventTool` to let it publish custom events:
 
 ```python
 from agentwerk import EventTool
@@ -817,7 +817,7 @@ The model supplies a name and optional JSON data:
 }
 ```
 
-Events carry the current task and agent context; see [Events](#events) for handlers and queries. Names are unrestricted; lowercase snake case is conventional.
+Events carry the current task and agent context; see [Events](#events) for hooks and queries. Names are unrestricted; lowercase snake case is conventional.
 
 Only `task_finished` completes the current task. Its `data` is the result dictionary:
 
@@ -883,19 +883,17 @@ See [`Tool`](https://docs.rs/agentwerk/latest/agentwerk/tools/struct.Tool.html).
 
 ## Events
 
-Events record what agents, tools, and LLM providers do during execution.
+Events provide detailed observability into agent behavior during execution. Register hooks to react to every event, finished result, failure, or task state change:
 
 ```python
-def log(werk, event):
-    if event.get_name() == Event.TASK_FINISHED:
-        print(event.get_data().get("answer"))
-
-
-werk.on_event(log)
+werk.on_event(lambda _, event: print(f"event: {event.get_name()}"))
+werk.on_result(lambda _, task, result: print(f"{task.get_id()}: {result}"))
+werk.on_failure(lambda _, event, task: print(f"{task.get_id()}: {event.get_name()}"))
+werk.on_task(lambda _, event, task: print(f"{task.get_id()}: {event.get_name()}"))
 ```
 
 <details>
-<summary>Event reference</summary>
+<summary>Event and hook reference</summary>
 
 #### Event names
 
@@ -953,7 +951,7 @@ werk.emit_event(Event("index_refreshed"))
 
 #### Read events
 
-Events are saved to `.agentwerk/events.jsonl`, except `text_chunk_received`. These streamed fragments reach handlers but are not available to event queries.
+Events are saved to `.agentwerk/events.jsonl`, except `text_chunk_received`. These streamed fragments reach hooks but are not available to event queries.
 
 | Method | Description |
 |--------|-------------|
@@ -975,7 +973,7 @@ Events are saved to `.agentwerk/events.jsonl`, except `text_chunk_received`. The
 | `directive(value)` | Set directive metadata; this does not send an instruction to the model. |
 | `get_directive()` | Read the directive metadata. |
 
-The default logger runs when no event handler is installed.
+The default logger runs when no event hook is installed.
 
 #### Query events
 
@@ -1001,62 +999,22 @@ Use `IS EMPTY` to find events without agent, task, or label context. `event.data
 
 See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html) and [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
 
-</details>
-
-### Hooks
-
-A hook runs your function when an event, result, failure, or task state change occurs.
-
-```python
-def triage(werk, event, failed):
-    if failed.get_label() == "scan":
-        werk.add_task(Task(failed.get_task(), label="triage"))
-
-
-werk.on_failure(triage)
-```
-
-<details>
-<summary>Hook reference</summary>
+#### Hooks
 
 | | Method | Description |
 |-|--------|-------------|
 | **Observe** | `on_event(handler)` | Read every event as it is emitted. |
-| | `on_event_async(handler)` | Read every event in an async handler. |
+| | `on_event_async(handler)` | Read every event in an async hook. |
 | | `on_result(handler)` | Read every finished task together with its result. |
-| | `on_result_async(handler)` | Read every finished task and result in an async handler. |
+| | `on_result_async(handler)` | Read every finished task and result in an async hook. |
 | | `on_failure(handler)` | Read every failure together with its task. |
-| | `on_failure_async(handler)` | Read every failure and task in an async handler. |
+| | `on_failure_async(handler)` | Read every failure and task in an async hook. |
 | | `on_task(handler)` | Read task state changes. |
-| | `on_task_async(handler)` | Read task state changes in an async handler. |
-
-Save replies of every finished task as a training example:
-
-```python
-def capture(werk, event, task):
-    if event.get_name() == Event.TASK_FINISHED:
-        model = werk.get_model_for_agent(event.get_agent_id())
-        Trajectory.from_task(event.get_agent_id(), model, task).save("datasets")
-
-
-werk.on_task(capture)
-```
-
-#### Async handlers
+| | `on_task_async(handler)` | Read task state changes in an async hook. |
 
 `on_result` runs synchronously on the agent; keep it brief. Use `on_result_async` for work that needs to await.
 
-Async hooks run while a completion method is waiting, and finish before it returns. `start()` alone does not run them. Do not call `finish`, `finish_task`, or `finish_tasks` inside an async hook: it can deadlock. Python handlers use `async def` and run on the caller's event loop.
-
-```python
-async def store(werk, task, result):
-    await database.insert(task.get_id(), result)
-
-
-werk.on_result_async(store)
-```
-
-See [`Werk`](https://docs.rs/agentwerk/latest/agentwerk/struct.Werk.html).
+Async hooks run while a completion method is waiting, and finish before it returns. `start()` alone does not run them. Do not call `finish`, `finish_task`, or `finish_tasks` inside an async hook: it can deadlock. Python hooks use `async def` and run on the caller's event loop.
 
 </details>
 
@@ -1076,7 +1034,7 @@ alice = Agent().knowledge(store)
 bob = Agent().knowledge(store)
 ```
 
-Calling `.knowledge(store)` registers a `KnowledgeTool(store)` bound to that store, so the agent can read and update its shared pages.
+Calling `.knowledge(store)` registers a `KnowledgeTool` bound to that store, so the agent can read and update its shared pages.
 
 <details>
 <summary>Knowledge reference</summary>
