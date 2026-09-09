@@ -11,7 +11,7 @@ async def test_override_values_are_rendered_into_retry_requests(
     werk, scripted_openai
 ):
     scripted_openai.respond_with_text("still thinking")
-    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    scripted_openai.respond_with_tool("finish", {"answer": "done"})
     agent = (
         aw.Agent()
         .provider(scripted_openai.provider())
@@ -22,12 +22,25 @@ async def test_override_values_are_rendered_into_retry_requests(
         )
     )
     werk.set_policy(aw.Policy(max_schema_retries=3)).add_agent(agent)
-    werk.add_task("go")
+    task = werk.add_task(
+        aw.Task(
+            "go",
+            schema=aw.Schema(
+                {
+                    "type": "object",
+                    "properties": {"answer": {"type": "string"}},
+                    "required": ["answer"],
+                }
+            ),
+        )
+    )
 
     await asyncio.wait_for(werk.finish(), timeout=5)
 
+    assert len(scripted_openai.requests) == 2
     retry_messages = scripted_openai.requests[1]["messages"]
     assert retry_messages[-1]["content"] == "Attempt 1 of 3 must call a tool."
+    assert werk.get_task(task).get_result() == {"answer": "done"}
 
 
 def test_bulk_overrides_bind_to_an_agent():
