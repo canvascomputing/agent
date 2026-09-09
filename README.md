@@ -479,8 +479,7 @@ werk.add_task(Task::labeled("report", "Write the board report."));
 
 agentwerk fills placeholders in the role and task just before each task's first model request. Newly added tasks use the latest template values and results.
 
-<details>
-<summary>Template reference</summary>
+#### Template reference
 
 | Expression | Output |
 |---|---|
@@ -493,8 +492,6 @@ agentwerk fills placeholders in the role and task just before each task's first 
 | `{{ readable(results: AQL) }}` | Matching results as a readable outline. |
 
 `{ name }` stays unchanged. To output the literal text `{{ name }}`, write `{{{{ name }}}}`.
-
-</details>
 
 #### Readable results
 
@@ -724,7 +721,10 @@ let agent = Agent::new()
     .tool(CommandTool::new("git").allow("git *"));
 ```
 
-### FinishTool
+<details>
+<summary>Tool reference</summary>
+
+#### FinishTool
 
 Agents use `FinishTool` to end their task and share their outcomes:
 
@@ -735,12 +735,9 @@ Agents use `FinishTool` to end their task and share their outcomes:
 }
 ```
 
-To return an object result, the agent must call `FinishTool`. If the task has a result schema, the tool validates the object against it. For a non-interactive task without a schema, the agent can instead finish by responding with plain text.
+To return a result, the agent must call `FinishTool`. If the task has a result schema, the tool validates the object against it. For a non-interactive task without a schema, the agent can instead finish by responding with plain text.
 
 [Interactive agents](#interactive) are the exception: they have no `FinishTool` unless you add one explicitly with `.tool(FinishTool)`.
-
-<details>
-<summary>Tool reference</summary>
 
 | | Tool | Description |
 |-|------|-------------|
@@ -938,7 +935,7 @@ werk.emit_event(Event::new("index_refreshed"));
 
 #### Read events
 
-Events are saved to `.agentwerk/events.jsonl`, except `text_chunk_received`. These streamed fragments reach hooks but are not available to event queries.
+Events are saved to `.agentwerk/events.jsonl`, except `text_chunk_received`.
 
 | Method | Description |
 |--------|-------------|
