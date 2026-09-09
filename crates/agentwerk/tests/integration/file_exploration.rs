@@ -20,7 +20,7 @@ async fn file_tools_explore_the_repository() -> std::result::Result<(), Box<dyn 
         .provider(provider)
         .model(&model)
         .role(
-            "{context}\n\n\
+            "{{ context }}\n\n\
              Explore the repository to answer the task. When you have an answer, \
              finish the task with your answer.",
         )

@@ -84,6 +84,22 @@ class ScriptedOpenAi:
             f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
         )
 
+    def respond_with_text(self, text):
+        chunk = {
+            "model": "mock",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"content": text},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }
+        self.responses.append(
+            f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n".encode()
+        )
+
     def provider(self):
         host, port = self._server.server_address
         return aw.OpenAi("test-key", base_url=f"http://{host}:{port}")

@@ -165,13 +165,13 @@ impl Agent {
 
     /// Define who the agent is and how it should work.
     ///
-    /// A `{context}` placeholder anywhere in the text expands to the facts of
+    /// A `{{ context }}` placeholder anywhere in the text expands to the facts of
     /// the moment as a bullet list: task ID, date, working directory,
     /// platform, and one line per configured limit. Each of those values is
     /// also a placeholder of its own, so a role can place one without the list:
-    /// `{task_id}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`,
-    /// `{turns_remaining}`, `{input_tokens_remaining}`,
-    /// `{output_tokens_remaining}`, and `{time_remaining}`. A limit left
+    /// `{{ task_id }}`, `{{ date }}`, `{{ dir }}`, `{{ platform }}`,
+    /// `{{ os_version }}`, `{{ turns_remaining }}`, `{{ input_tokens_remaining }}`,
+    /// `{{ output_tokens_remaining }}`, and `{{ time_remaining }}`. A limit left
     /// unconfigured expands to nothing and shows no bullet. Leave the
     /// placeholders out and nothing is added, so the role decides both whether
     /// those facts appear and where.
@@ -272,7 +272,7 @@ impl Agent {
     ///
     /// The key is exact and may name a built-in directive or an application
     /// event published through `EventTool`. Runtime placeholders such as
-    /// `{path}` remain available in the replacement.
+    /// `{{ path }}` remain available in the replacement.
     pub fn directive(mut self, key: impl Into<String>, template: impl Into<String>) -> Self {
         Arc::make_mut(&mut self.directives).insert(key, template);
         self
@@ -627,14 +627,14 @@ mod tests {
     fn agent_template_values_do_not_bind_directive_placeholders() {
         let agent = Agent::new()
             .template("path", "src/lib.rs")
-            .directive("cache_miss", "Missing {path}");
+            .directive("cache_miss", "Missing {{ path }}");
 
         assert_eq!(
             agent
                 .get_directives()
                 .render_override("cache_miss", &[])
                 .as_deref(),
-            Some("Missing {path}"),
+            Some("Missing {{ path }}"),
         );
     }
 
@@ -684,7 +684,7 @@ mod tests {
     fn a_role_read_by_the_caller_keeps_its_placeholders_expandable() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let file = dir.path().join("reviewer.md");
-        std::fs::write(&file, "ROLE\n\n{context}\n").unwrap();
+        std::fs::write(&file, "ROLE\n\n{{ context }}\n").unwrap();
         let role = std::fs::read_to_string(file).unwrap();
         let agent = Agent::new().role(role).dir("/tmp/check");
         assert!(
@@ -695,7 +695,7 @@ mod tests {
 
     #[test]
     fn system_prompt_expands_the_context_placeholder() {
-        let agent = Agent::new().role("ROLE\n\n{context}").dir("/tmp/check");
+        let agent = Agent::new().role("ROLE\n\n{{ context }}").dir("/tmp/check");
         let prompt = create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1");
         assert!(prompt.starts_with("ROLE\n\n"));
         assert!(prompt.contains("- Task: T-1"));
@@ -706,7 +706,7 @@ mod tests {
 
     #[test]
     fn the_context_block_lists_the_remaining_budgets() {
-        let agent = Agent::new().role("{context}").dir("/tmp/check");
+        let agent = Agent::new().role("{{ context }}").dir("/tmp/check");
         let policy = Policy {
             max_turns: Some(3),
             max_input_tokens: Some(1_000),
@@ -734,7 +734,7 @@ mod tests {
     #[test]
     fn built_in_context_shadows_a_shared_template() {
         let agent = Agent::new()
-            .role("{context}")
+            .role("{{ context }}")
             .template("context", "- Note: mine");
         assert!(
             create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1")
@@ -745,7 +745,7 @@ mod tests {
     #[test]
     fn a_single_context_value_expands_without_the_block() {
         let agent = Agent::new()
-            .role("Task {task_id} in {dir}, {turns_remaining} turns left.")
+            .role("Task {{ task_id }} in {{ dir }}, {{ turns_remaining }} turns left.")
             .dir("/tmp/check");
         let policy = Policy {
             max_turns: Some(3),
@@ -760,17 +760,17 @@ mod tests {
 
     #[test]
     fn task_is_not_an_alias_for_task_id() {
-        let agent = Agent::new().role("{task}");
+        let agent = Agent::new().role("{{ task }}");
 
         assert_eq!(
             create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
-            "{task}"
+            "{{ task }}"
         );
     }
 
     #[test]
     fn a_single_budget_value_expands_to_nothing_when_unconfigured() {
-        let agent = Agent::new().role("Turns left: {turns_remaining}.");
+        let agent = Agent::new().role("Turns left: {{ turns_remaining }}.");
         assert_eq!(
             create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
             "Turns left: ."
@@ -779,7 +779,9 @@ mod tests {
 
     #[test]
     fn built_in_value_shadows_a_shared_template() {
-        let agent = Agent::new().role("{task_id}").template("task_id", "mine");
+        let agent = Agent::new()
+            .role("{{ task_id }}")
+            .template("task_id", "mine");
         assert_eq!(
             create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
             "T-1"
@@ -851,7 +853,7 @@ mod tests {
     #[test]
     fn system_prompt_interpolates_role_placeholders() {
         let agent = Agent::new()
-            .role("You are {persona}.")
+            .role("You are {{ persona }}.")
             .template("persona", "a senior reviewer");
         assert_eq!(
             create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
@@ -861,17 +863,17 @@ mod tests {
 
     #[test]
     fn unresolved_placeholders_pass_through() {
-        let agent = Agent::new().role("Hi {missing}.");
+        let agent = Agent::new().role("Hi {{ missing }}.");
         assert_eq!(
             create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
-            "Hi {missing}."
+            "Hi {{ missing }}."
         );
     }
 
     #[test]
     fn multiple_variables_substitute_independently() {
         let agent = Agent::new()
-            .role("{greeting}, {name}.")
+            .role("{{ greeting }}, {{ name }}.")
             .templates([("greeting", "Hello"), ("name", "Alice")]);
         assert_eq!(
             create_system_prompt(&agent, None, &Policy::default(), &Stats::new(), "T-1"),
@@ -895,7 +897,7 @@ mod tests {
         werk.set_dir(dir.path().to_path_buf());
         let mut agent = callable(Agent::new().template("topic", "rust"));
         werk.bind_agent(&mut agent);
-        agent.add_task("Search {topic} forums.");
+        agent.add_task("Search {{ topic }} forums.");
         let stored = werk
             .get_tasks()
             .into_iter()
@@ -903,7 +905,7 @@ mod tests {
             .expect("task should have been enqueued");
         assert_eq!(
             stored.task,
-            serde_json::Value::String("Search {topic} forums.".into()),
+            serde_json::Value::String("Search {{ topic }} forums.".into()),
         );
     }
 
@@ -916,7 +918,7 @@ mod tests {
         // exists yet at dispatch. Only the role expands it.
         let mut agent = callable(Agent::new());
         werk.bind_agent(&mut agent);
-        agent.add_task("Work on {context}.");
+        agent.add_task("Work on {{ context }}.");
         let stored = werk
             .get_tasks()
             .into_iter()
@@ -924,7 +926,7 @@ mod tests {
             .expect("task should have been enqueued");
         assert_eq!(
             stored.task,
-            serde_json::Value::String("Work on {context}.".into()),
+            serde_json::Value::String("Work on {{ context }}.".into()),
         );
     }
 
@@ -935,7 +937,7 @@ mod tests {
         werk.set_dir(dir.path().to_path_buf());
         let mut agent = callable(Agent::new().template("topic", "rust"));
         werk.bind_agent(&mut agent);
-        let value = serde_json::json!({"q": "Find {topic}"});
+        let value = serde_json::json!({"q": "Find {{ topic }}"});
         agent.add_task(Task::new(value.clone()));
         let stored = werk
             .get_tasks()
@@ -1060,23 +1062,23 @@ mod tests {
         assert_eq!(
             create_system_prompt(
                 &agent,
-                Some("\n{company}\n"),
+                Some("\n{{ company }}\n"),
                 &Policy::default(),
                 &Stats::new(),
                 "T-1",
             ),
-            "## Knowledge\n\n{company}"
+            "## Knowledge\n\n{{ company }}"
         );
         let agent = agent.role("\nRole\n");
         assert_eq!(
             create_system_prompt(
                 &agent,
-                Some("\n{company}\n"),
+                Some("\n{{ company }}\n"),
                 &Policy::default(),
                 &Stats::new(),
                 "T-1",
             ),
-            "Role\n\n## Knowledge\n\n{company}"
+            "Role\n\n## Knowledge\n\n{{ company }}"
         );
     }
 

@@ -175,7 +175,7 @@ async fn seeker_pool_finds_planted_indicators(
             .provider(provider.clone())
             .model(&model)
             .role(
-                "{context}\n\n\
+                "{{ context }}\n\n\
                  You receive one security finding. Immediately call `finish` with a \
                  one-word summary such as \"noted\". Do not call any other tool.",
             )

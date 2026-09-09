@@ -17,7 +17,8 @@ The invariants that govern orchestration, tools, providers, events, and durable 
 **Prompt rendering is a private Werk implementation detail; callers provide strings and shared template values.**
 
 - Delegate Agent setters to Werk. Import missing templates when binding; destination values win.
-- Resolve template values and AQL expressions in one pass inside `prompts/prompt.rs`; never scan inserted values.
+- Parse double-brace syntax once in `prompts/prompt.rs`; use strict expression resolution for prompts and infallible named resolution for directives and runtime context. Never scan inserted values.
+- Allow one layer of named values inside result queries as raw AQL source. Keep `readable` limited to singular and plural result selectors, formatting their JSON values as an indented outline.
 - Let Werk snapshot shared templates once when it prepares a role and initial string task, and report failures through `prompt_render_failed` before the first request.
 - Freeze the complete rendered system prompt at the task's first request. Reuse its earliest persisted system reply through later turns, retries, continuation, compaction, and reload.
 - Record the prepared task message and one frozen system prompt in replies. Keep shared templates as runtime configuration rather than persisted session data; ignore legacy captured template fields when loading tasks.

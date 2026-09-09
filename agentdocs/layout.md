@@ -20,7 +20,7 @@ Where code, tests, bindings, examples, and repository guidance live.
 - `src/event.rs` owns `Event`; `src/persistence.rs` owns shared file primitives and stays crate-private.
 - `src/agents/` owns agent configuration, tasks, orchestration, policy, queries, statistics, retries, compaction, and knowledge.
 - `src/providers/`, `src/tools/`, and `src/schemas/` own LLM providers, agent actions, and result validation.
-- `src/prompts/prompt.rs` owns Werk's single-pass template substitution and AQL expressions. `prompts/mod.rs` supplies runtime string values and directives; Agent and Task pass source strings to Werk.
+- `src/prompts/prompt.rs` owns Werk's single-pass template substitution and AQL expressions. `prompts/mod.rs` supplies runtime string values and directives; Agent and Task pass prompts to Werk.
 
 ## Agents and Tasks
 

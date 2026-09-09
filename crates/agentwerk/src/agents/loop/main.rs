@@ -37,7 +37,7 @@ pub(in crate::agents) async fn run_main_loop(werk: &Werk) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
     use crate::agents::agent::Agent;
@@ -46,6 +46,39 @@ mod tests {
     use crate::agents::tasks::{Status, Task, Werk};
     use crate::event::Event;
     use crate::tools::TaskTool;
+
+    #[tokio::test]
+    async fn completion_waits_for_failure_handlers_and_wakes_when_they_finish() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf());
+        let id = werk.add_task("go");
+        let (entered, started) = tokio::sync::oneshot::channel();
+        let entered = Mutex::new(Some(entered));
+        let (release, released) = std::sync::mpsc::channel();
+        let released = Mutex::new(released);
+        werk.on_failure(move |_, event, _| {
+            if event.get_name() == Event::TASK_FAILED {
+                entered.lock().unwrap().take().unwrap().send(()).unwrap();
+                released.lock().unwrap().recv().unwrap();
+            }
+        });
+        let failing = werk.clone();
+        let failure = std::thread::spawn(move || failing.set_task_failed(&id).unwrap());
+        started.await.unwrap();
+        let completion = werk.finish();
+        tokio::pin!(completion);
+        tokio::select! {
+            biased;
+            _ = &mut completion => panic!("completion returned before the failure hook"),
+            _ = tokio::task::yield_now() => {},
+        }
+        release.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), completion)
+            .await
+            .unwrap();
+        failure.join().unwrap();
+    }
 
     // Late-add agent tests
 

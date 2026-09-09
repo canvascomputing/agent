@@ -4,10 +4,10 @@
 value is rejected by `false` schema
 
 ## schema_type_mismatched
-expected type {expected}, got {got}
+expected type {{ expected }}, got {{ got }}
 
 ## schema_const_mismatched
-expected {expected}
+expected {{ expected }}
 
 ## schema_enum_mismatched
 value is not in `enum`
@@ -16,37 +16,37 @@ value is not in `enum`
 value does not match any of the anyOf schemas
 
 ## schema_one_of_ambiguous
-value matches {count} of the oneOf schemas, expected exactly 1
+value matches {{ count }} of the oneOf schemas, expected exactly 1
 
 ## schema_not_matched
 value must not match the `not` schema
 
 ## schema_property_missing
-missing required property `{name}`
+missing required property `{{ name }}`
 
 ## schema_property_unexpected
-unexpected property `{name}`
+unexpected property `{{ name }}`
 
 ## schema_array_too_short
-array has {count} items, expected at least {min}
+array has {{ count }} items, expected at least {{ min }}
 
 ## schema_array_too_long
-array has {count} items, expected at most {max}
+array has {{ count }} items, expected at most {{ max }}
 
 ## schema_string_too_short
-string length {length} is below minimum {min}
+string length {{ length }} is below minimum {{ min }}
 
 ## schema_string_too_long
-string length {length} is above maximum {max}
+string length {{ length }} is above maximum {{ max }}
 
 ## schema_pattern_unmatched
-string does not match pattern `{pattern}`
+string does not match pattern `{{ pattern }}`
 
 ## schema_number_too_small
-value {value} is below minimum {min}
+value {{ value }} is below minimum {{ min }}
 
 ## schema_number_too_large
-value {value} is above maximum {max}
+value {{ value }} is above maximum {{ max }}
 
 ## schema_hint_unquote
 send the value unquoted

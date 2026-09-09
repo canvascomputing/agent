@@ -115,10 +115,10 @@ def test_add_task_uses_the_shared_werk_after_binding(offline_agent, werk):
     offline_agent.template("topic", "parity")
     werk.add_agent(offline_agent)
 
-    id = offline_agent.add_task("check {topic}")
+    id = offline_agent.add_task("check {{ topic }}")
 
     assert id.startswith("t-")
-    assert werk.get_task(id).get_task() == "check {topic}"
+    assert werk.get_task(id).get_task() == "check {{ topic }}"
 
 
 def test_agent_task_is_not_a_compatibility_alias():

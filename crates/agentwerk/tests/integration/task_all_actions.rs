@@ -64,7 +64,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
             .model(&model)
             .label("archive")
             .role(
-                "{context}\n\n\
+                "{{ context }}\n\n\
                  Finish your task in a single call, passing the combination from \
                  your task as your result.",
             ),
@@ -75,7 +75,7 @@ async fn walks_every_task_action() -> std::result::Result<(), Box<dyn std::error
             .model(&model)
             .label("auditor")
             .role(
-                "{context}\n\n\
+                "{{ context }}\n\n\
                  Work your task with the task tool, one call at a time, in \
                  this order, then call `finish`:\n\
                  1. Read your own task and note its `source_task_id`.\n\

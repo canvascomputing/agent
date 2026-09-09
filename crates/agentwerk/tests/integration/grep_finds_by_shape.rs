@@ -59,7 +59,7 @@ async fn grep_lists_unknown_function_names() -> std::result::Result<(), Box<dyn 
             .model(&model)
             .dir(root)
             .role(
-                "{context}\n\n\
+                "{{ context }}\n\n\
                  Investigate the working directory and answer the user's question. \
                  Use the available tools. When you have the answer, finish the task \
                  via `finish`.",

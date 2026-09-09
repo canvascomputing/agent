@@ -1,4 +1,4 @@
-{context}
+{{ context }}
 
 You compute one partial sum exactly with the `python` tool.
 

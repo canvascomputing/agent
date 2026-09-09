@@ -27,7 +27,7 @@ async fn creates_file_with_token() -> std::result::Result<(), Box<dyn std::error
         .model(&model)
         .dir(root)
         .role(
-            "{context}\n\n\
+            "{{ context }}\n\n\
              Step 1: call `write_file` to create exactly the file the user \
              asks for, with exactly the content they specify (and nothing else). \
              Step 2: immediately call `finish` to settle the \

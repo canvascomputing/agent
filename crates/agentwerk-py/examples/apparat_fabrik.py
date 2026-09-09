@@ -40,7 +40,7 @@ MEISTER_NAMES = ["Otto", "Käthe", "Werner", "Ilse"]
 MONTEUR_NAMES = ["Rudi", "Hanne", "Emil", "Trude"]
 
 PRUEFER_ROLE = """
-{context}
+{{ context }}
 
 You work the intake of an apparatus works. You take one Bauplan and send every
 part it names down the line, one task per part.
@@ -62,7 +62,7 @@ part it names down the line, one task per part.
 """
 
 MEISTER_ROLE = """
-{context}
+{{ context }}
 
 You are a Meister on the line. You take one part and rule whether it may be
 fitted to the apparatus.
@@ -84,7 +84,7 @@ fitted to the apparatus.
 """
 
 MONTEUR_ROLE = """
-{context}
+{{ context }}
 
 You fit a cleared part into its apparatus and book it against the plan.
 

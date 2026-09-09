@@ -111,7 +111,7 @@ pub(super) fn dispatch(
 }
 
 /// Render an explicit application-event override from its JSON payload. The
-/// complete payload is `{data}`; top-level object fields are variables of
+/// complete payload is `{{ data }}`; top-level object fields are variables of
 /// their own.
 fn event_directive(name: &str, data: &Value, directives: &DirectiveStore) -> Option<String> {
     let mut owned = vec![("data".to_string(), json_template_value(data))];
@@ -259,7 +259,7 @@ mod tests {
         let mut directives = DirectiveStore::default();
         directives.insert(
             "candidate_found",
-            "Found {path} at {line} with {meta}; keep {missing}. Payload: {data}",
+            "Found {{ path }} at {{ line }} with {{ meta }}; keep {{ missing }}. Payload: {{ data }}",
         );
         let ctx = ctx.directives(Arc::new(directives));
 
@@ -281,7 +281,7 @@ mod tests {
         assert_eq!(outcome.get_directive(), Some("candidate_found"));
         assert!(outcome
             .get_content()
-            .starts_with("Found src/auth.rs at 42 with {\"reviewed\":true}; keep {missing}."));
+            .starts_with("Found src/auth.rs at 42 with {\"reviewed\":true}; keep {{ missing }}.",));
         assert!(outcome.get_content().contains("\"path\":\"src/auth.rs\""));
         assert!(outcome.get_content().contains("\"data\":\"shadow\""));
         assert_eq!(

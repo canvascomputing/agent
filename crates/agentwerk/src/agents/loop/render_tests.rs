@@ -37,11 +37,11 @@ fn research(werk: &Werk, result: &str) -> String {
 async fn first_request_sees_values_and_results_supplied_after_the_task_is_added() {
     let (werk, _dir) = session();
     let provider = MockProvider::with_results(vec![Ok(write_result_response("done"))]);
-    werk.add_agent(task_agent(&provider).role("{company}: {result: research}"));
-    let id = werk.add_task("Write for {company}: {result: research}");
+    werk.add_agent(task_agent(&provider).role("{{ company }}: {{ result: research }}"));
+    let id = werk.add_task("Write for {{ company }}: {{ result: research }}");
     assert_eq!(
         werk.get_task(&id).unwrap().get_task(),
-        "Write for {company}: {result: research}"
+        "Write for {{ company }}: {{ result: research }}"
     );
     werk.set_template("company", "Acme");
     research(&werk, "findings");
@@ -54,6 +54,19 @@ async fn first_request_sees_values_and_results_supplied_after_the_task_is_added(
 }
 
 #[tokio::test]
+async fn runtime_context_values_render_in_roles_and_string_tasks() {
+    let (werk, _dir) = session();
+    let provider = MockProvider::with_results(vec![Ok(write_result_response("done"))]);
+    werk.add_agent(task_agent(&provider).role("Role {{ task_id }}"));
+    let id = werk.add_task("Task {{ task_id }}");
+
+    finish(&werk).await;
+
+    assert_eq!(provider.received_system_prompts(), [format!("Role {id}")]);
+    assert_eq!(user_text(&provider.received()[0]), format!("Task {id}\n"));
+}
+
+#[tokio::test]
 async fn later_template_and_result_updates_do_not_change_the_task_prompts() {
     let (werk, _dir) = session();
     let provider = MockProvider::with_results(vec![
@@ -63,9 +76,9 @@ async fn later_template_and_result_updates_do_not_change_the_task_prompts() {
     let first = research(&werk, "old research");
     let first_path = werk.result_path(&first).canonicalize().unwrap();
     werk.set_template("company", "Old");
-    let source = "{company}: {result: research ORDER BY task.id DESC} | {result_path: research ORDER BY task.id DESC}";
-    werk.add_agent(task_agent(&provider).role(source));
-    let id = werk.add_task("{company}: {result: research ORDER BY task.id DESC}");
+    let role = "{{ company }}: {{ result: research ORDER BY task.id DESC }} | {{ result_path: research ORDER BY task.id DESC }}";
+    werk.add_agent(task_agent(&provider).role(role));
+    let id = werk.add_task("{{ company }}: {{ result: research ORDER BY task.id DESC }}");
     werk.on_event(|werk, event| {
         if event.get_name() == Event::REQUEST_FINISHED && werk.find_results("research").len() == 1 {
             werk.set_template("company", "New");
@@ -134,7 +147,7 @@ async fn updates_during_an_in_flight_request_do_not_change_the_task_prompt() {
         Agent::new()
             .provider(provider.clone())
             .model("mock")
-            .role("{company}"),
+            .role("{{ company }}"),
     );
     werk.add_task("go");
     let update = async {
@@ -165,8 +178,8 @@ async fn retry_and_following_requests_reuse_the_task_prompt() {
         ..Default::default()
     });
     werk.set_template("company", "Old");
-    werk.add_agent(task_agent(&provider).role("{company}"));
-    werk.add_task("{company}");
+    werk.add_agent(task_agent(&provider).role("{{ company }}"));
+    werk.add_task("{{ company }}");
     werk.on_event(|werk, event| {
         if event.get_name() == Event::REQUEST_RETRIED {
             werk.set_template("company", "New");
@@ -188,11 +201,11 @@ async fn template_updates_after_the_first_request_cannot_change_or_fail_the_task
         Ok(write_result_response("done")),
     ]);
     werk.set_template("company", "Old");
-    werk.add_agent(task_agent(&provider).role("{company}"));
+    werk.add_agent(task_agent(&provider).role("{{ company }}"));
     let id = werk.add_task("go");
     werk.on_event(|werk, event| {
         if event.get_name() == Event::REQUEST_FINISHED {
-            werk.set_template("company", "{result: absent}");
+            werk.set_template("company", "{{ result: absent }}");
         }
     });
 
@@ -214,20 +227,20 @@ async fn shared_values_with_expressions_remain_literal_across_requests() {
         Ok(text_response("continue")),
         Ok(write_result_response("done")),
     ]);
-    werk.set_template("data", "{company} {result: absent}");
-    werk.add_agent(task_agent(&provider).role("Data: {data}"));
-    werk.add_task("Data: {data}");
+    werk.set_template("data", "{{ company }} {{ result: absent }}");
+    werk.add_agent(task_agent(&provider).role("Data: {{ data }}"));
+    werk.add_task("Data: {{ data }}");
     finish(&werk).await;
     assert_eq!(
         provider.received_system_prompts(),
         [
-            "Data: {company} {result: absent}",
-            "Data: {company} {result: absent}"
+            "Data: {{ company }} {{ result: absent }}",
+            "Data: {{ company }} {{ result: absent }}"
         ]
     );
     assert_eq!(
         user_text(&provider.received()[0]),
-        "Data: {company} {result: absent}\n"
+        "Data: {{ company }} {{ result: absent }}\n"
     );
 }
 
@@ -244,11 +257,11 @@ async fn agent_setters_update_shared_values_for_roles_and_previously_added_tasks
     werk.add_agent(
         task_agent(&provider)
             .label("worker")
-            .role("{company}")
+            .role("{{ company }}")
             .template("company", "old")
             .template("company", "Worker"),
     );
-    creator.add_task(Task::labeled("worker", "{company}"));
+    creator.add_task(Task::labeled("worker", "{{ company }}"));
     creator.clone().template("company", "Updated");
     finish(&werk).await;
     assert_eq!(provider.received_system_prompts(), ["Updated"]);
@@ -261,14 +274,14 @@ async fn interactive_continuation_reuses_the_prompt_without_rendering_caller_rep
     let provider =
         MockProvider::with_results(vec![Ok(text_response("hello")), Ok(text_response("again"))]);
     werk.set_template("company", "Old");
-    werk.add_agent(interactive_chatbot(&provider).role("{company}"));
-    let id = werk.add_task("{company}");
+    werk.add_agent(interactive_chatbot(&provider).role("{{ company }}"));
+    let id = werk.add_task("{{ company }}");
     finish(&werk).await;
     werk.set_template("company", "New");
-    werk.add_reply(&id, "{company} {result: absent}");
+    werk.add_reply(&id, "{{ company }} {{ result: absent }}");
     finish(&werk).await;
     assert_eq!(provider.received_system_prompts(), ["Old", "Old"]);
-    assert!(user_text(&provider.received()[1]).contains("{company} {result: absent}"));
+    assert!(user_text(&provider.received()[1]).contains("{{ company }} {{ result: absent }}"));
     assert_eq!(
         user_text(&provider.received()[0][..1]),
         user_text(&provider.received()[1][..1])
@@ -284,47 +297,84 @@ async fn reload_uses_only_shared_templates_restored_by_the_caller() {
     ]);
     let agent = task_agent(&provider).template("company", "Captured");
     werk.add_agent(agent.clone());
-    agent.add_task("{company}");
-    werk.set_template("data", "{company} {result: absent}");
-    agent.add_task("{data}");
+    agent.add_task("{{ company }}");
+    werk.set_template("data", "{{ company }} {{ result: absent }}");
+    agent.add_task("{{ data }}");
     let loaded = Werk::load(dir.path()).unwrap();
     loaded
-        .set_templates([("company", "New"), ("data", "{company} {result: absent}")])
+        .set_templates([
+            ("company", "New"),
+            ("data", "{{ company }} {{ result: absent }}"),
+        ])
         .add_agent(task_agent(&provider));
     finish(&loaded).await;
     assert_eq!(user_text(&provider.received()[0]), "New\n");
     assert_eq!(
         user_text(&provider.received()[1]),
-        "{company} {result: absent}\n"
+        "{{ company }} {{ result: absent }}\n"
     );
 }
 
+async fn fail_to_render(
+    in_role: bool,
+    prompt: &str,
+) -> (
+    Arc<Werk>,
+    crate::test_util::TempDir,
+    Arc<MockProvider>,
+    String,
+    Arc<Mutex<Vec<String>>>,
+) {
+    let (werk, dir) = session();
+    let provider = MockProvider::with_results(vec![]);
+    let role = if in_role { prompt } else { "role" };
+    werk.add_agent(task_agent(&provider).role(role));
+    let id = werk.add_task(if in_role { "go" } else { prompt });
+    let failures = Arc::new(Mutex::new(Vec::new()));
+    let observed = failures.clone();
+    werk.on_failure(move |_, event, _| observed.lock().unwrap().push(event.get_name().to_string()));
+    finish(&werk).await;
+    (werk, dir, provider, id, failures)
+}
+
 #[tokio::test]
-async fn render_errors_fail_before_the_provider_call_and_reach_failure_hooks_and_reload() {
+async fn role_and_task_render_failures_stop_before_the_provider_request() {
     for in_role in [true, false] {
-        let (werk, dir) = session();
-        let provider = MockProvider::with_results(vec![]);
-        let role = if in_role { "{result: absent}" } else { "role" };
-        werk.add_agent(task_agent(&provider).role(role));
-        let id = werk.add_task(if in_role { "go" } else { "{result: absent}" });
-        let failures = Arc::new(Mutex::new(Vec::new()));
-        let observed = failures.clone();
-        werk.on_failure(move |_, event, _| {
-            observed.lock().unwrap().push(event.get_name().to_string())
-        });
-        finish(&werk).await;
+        let (werk, _dir, provider, id, _failures) =
+            fail_to_render(in_role, "{{ result: absent }}").await;
+
         assert_eq!(provider.requests(), 0);
         assert!(werk.get_task(&id).unwrap().is_failed());
-        assert_eq!(
-            *failures.lock().unwrap(),
-            [Event::PROMPT_RENDER_FAILED, Event::TASK_FAILED]
-        );
-        let loaded = Werk::load(dir.path()).unwrap();
-        let task = loaded.get_task(&id).unwrap();
-        let error = &task.get_errors()[0];
-        assert_eq!(error.get_name(), Event::PROMPT_RENDER_FAILED);
-        assert_eq!(error.get_data()["expression"], "result: absent");
     }
+}
+
+#[tokio::test]
+async fn prompt_render_failures_reach_hooks_and_survive_reload() {
+    let (_werk, dir, _provider, id, failures) = fail_to_render(true, "{{ result: absent }}").await;
+
+    assert_eq!(
+        *failures.lock().unwrap(),
+        [Event::PROMPT_RENDER_FAILED, Event::TASK_FAILED]
+    );
+    let loaded = Werk::load(dir.path()).unwrap();
+    let task = loaded.get_task(&id).unwrap();
+    let error = &task.get_errors()[0];
+    assert_eq!(error.get_name(), Event::PROMPT_RENDER_FAILED);
+    assert_eq!(error.get_data()["expression"], "result: absent");
+}
+
+#[tokio::test]
+async fn nested_render_failures_report_the_outer_expression() {
+    let (werk, _dir, _provider, id, _failures) =
+        fail_to_render(true, "{{ result: {{ missing_selection }} }}").await;
+
+    let task = werk.get_task(&id).unwrap();
+    let error = &task.get_errors()[0];
+    assert_eq!(error.get_name(), Event::PROMPT_RENDER_FAILED);
+    assert_eq!(
+        error.get_data()["expression"],
+        "result: {{ missing_selection }}"
+    );
 }
 
 #[tokio::test]
@@ -332,8 +382,8 @@ async fn concurrent_tasks_receive_their_own_runtime_prompt_values() {
     let (werk, _dir) = session();
     let alpha = MockProvider::with_results(vec![Ok(write_result_response("alpha"))]);
     let beta = MockProvider::with_results(vec![Ok(write_result_response("beta"))]);
-    werk.add_agent(task_agent(&alpha).label("alpha").role("{task_id}"));
-    werk.add_agent(task_agent(&beta).label("beta").role("{task_id}"));
+    werk.add_agent(task_agent(&alpha).label("alpha").role("{{ task_id }}"));
+    werk.add_agent(task_agent(&beta).label("beta").role("{{ task_id }}"));
     let alpha_id = werk.add_task(Task::labeled("alpha", "go"));
     let beta_id = werk.add_task(Task::labeled("beta", "go"));
     finish(&werk).await;
@@ -348,13 +398,13 @@ async fn structured_task_input_is_never_interpreted_as_a_template() {
     werk.set_template("company", "New")
         .add_agent(task_agent(&provider));
     werk.add_task(Task::new(
-        serde_json::json!({"company": "{company}", "query": "{result: absent}"}),
+        serde_json::json!({"company": "{{ company }}", "query": "{{ result: absent }}"}),
     ));
     finish(&werk).await;
     let messages = provider.received();
     let input: serde_json::Value = serde_json::from_str(user_text(&messages[0]).trim()).unwrap();
-    assert_eq!(input["company"], "{company}");
-    assert_eq!(input["query"], "{result: absent}");
+    assert_eq!(input["company"], "{{ company }}");
+    assert_eq!(input["query"], "{{ result: absent }}");
 }
 
 #[tokio::test]
@@ -362,9 +412,9 @@ async fn resumed_session_reuses_the_prompt_and_preserves_existing_messages() {
     let (werk, dir) = session();
     let provider =
         MockProvider::with_results(vec![Ok(text_response("hello")), Ok(text_response("again"))]);
-    let agent = interactive_chatbot(&provider).role("{company}");
+    let agent = interactive_chatbot(&provider).role("{{ company }}");
     werk.set_template("company", "Old").add_agent(agent.clone());
-    let id = werk.add_task("{company}");
+    let id = werk.add_task("{{ company }}");
     finish(&werk).await;
     werk.cancel_all_tasks();
     finish(&werk).await;
@@ -412,7 +462,7 @@ async fn legacy_histories_reuse_the_earliest_system_prompt_without_rewriting_rep
     let (werk, dir) = session();
     let provider =
         MockProvider::with_results(vec![Ok(text_response("hello")), Ok(text_response("again"))]);
-    let agent = interactive_chatbot(&provider).role("{company}");
+    let agent = interactive_chatbot(&provider).role("{{ company }}");
     werk.set_template("company", "Old");
     werk.add_agent(agent.clone());
     let id = werk.add_task("review");
@@ -467,7 +517,7 @@ async fn compaction_reuses_the_frozen_system_prompt() {
         Agent::new()
             .provider(provider.clone())
             .model(Model::new("mock").context_window(200_000))
-            .role("{company}"),
+            .role("{{ company }}"),
     );
     let id = werk.add_task(Task::new("go").schema(string_schema()));
     werk.on_event(|werk, event| {
@@ -493,37 +543,6 @@ async fn compaction_reuses_the_frozen_system_prompt() {
 }
 
 #[tokio::test]
-async fn completion_waits_for_failure_handlers_and_wakes_when_they_finish() {
-    let (werk, _dir) = session();
-    let id = werk.add_task("go");
-    let (entered, started) = tokio::sync::oneshot::channel();
-    let entered = Mutex::new(Some(entered));
-    let (release, released) = std::sync::mpsc::channel();
-    let released = Mutex::new(released);
-    werk.on_failure(move |_, event, _| {
-        if event.get_name() == Event::TASK_FAILED {
-            entered.lock().unwrap().take().unwrap().send(()).unwrap();
-            released.lock().unwrap().recv().unwrap();
-        }
-    });
-    let failing = werk.clone();
-    let failure = std::thread::spawn(move || failing.set_task_failed(&id).unwrap());
-    started.await.unwrap();
-    let completion = werk.finish();
-    tokio::pin!(completion);
-    tokio::select! {
-        biased;
-        _ = &mut completion => panic!("completion returned before the failure hook"),
-        _ = tokio::task::yield_now() => {},
-    }
-    release.send(()).unwrap();
-    tokio::time::timeout(Duration::from_secs(5), completion)
-        .await
-        .unwrap();
-    failure.join().unwrap();
-}
-
-#[tokio::test]
 async fn standalone_and_shared_agents_use_the_same_templates_and_transfer_queued_sources() {
     let provider = MockProvider::with_results(vec![
         Ok(write_result_response("private")),
@@ -534,7 +553,7 @@ async fn standalone_and_shared_agents_use_the_same_templates_and_transfer_queued
     let make_agent = || {
         task_agent(&provider)
             .template("brief", "Private")
-            .role("{brief}")
+            .role("{{ brief }}")
     };
     let agent = make_agent();
     let private = agent.werk.upgrade().unwrap();
@@ -542,14 +561,14 @@ async fn standalone_and_shared_agents_use_the_same_templates_and_transfer_queued
     private
         .set_dir(private_dir.path().to_path_buf())
         .on_event(|_, _| {});
-    agent.add_task("{brief}");
+    agent.add_task("{{ brief }}");
     agent.finish().await;
     private.add_agent(agent.clone());
     assert_eq!(private.get_tasks().len(), 1);
     assert!(private.get_tasks()[0].is_finished());
     assert_eq!(provider.received_system_prompts(), ["Private"]);
     let agent = make_agent();
-    agent.add_task("{brief}");
+    agent.add_task("{{ brief }}");
     shared.add_agent(agent.clone());
     assert!(!serde_json::to_value(shared.get_tasks().last().unwrap())
         .unwrap()
@@ -566,13 +585,13 @@ async fn standalone_and_shared_agents_use_the_same_templates_and_transfer_queued
 fn legacy_prompt_fields_are_ignored() {
     let (werk, _dir) = session();
     werk.set_template("company", "Shared");
-    let mut data = serde_json::to_value(Task::from("{company}")).unwrap();
+    let mut data = serde_json::to_value(Task::from("{{ company }}")).unwrap();
     data["templates"] = serde_json::json!({"company": "Captured"});
     data["prompt_templates"] = serde_json::json!({"company": "Local"});
     data["rendered"] = true.into();
     let task: Task = serde_json::from_value(data).unwrap();
     assert_eq!(
-        task.initial_reply(&werk).unwrap().content[0].get_text(),
+        task.initial_reply(&werk, &[]).unwrap().content[0].get_text(),
         Some("Shared")
     );
 }

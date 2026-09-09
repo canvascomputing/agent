@@ -84,7 +84,7 @@ pub(crate) const MAX_DIR_ENTRIES: usize = 100;
 
 /// Sorted entry names of `dir`, sub-directories marked with a trailing `/`,
 /// capped at [`MAX_DIR_ENTRIES`] with a `… and N more` tail. Joined by `"\n  "`
-/// so callers render `…:\n  {entries}`. `None` when the directory cannot be read.
+/// so callers render `…:\n  {{ entries }}`. `None` when the directory cannot be read.
 pub(crate) fn directory_entries(dir: &Path) -> Option<String> {
     let read = std::fs::read_dir(dir).ok()?;
     let mut names: Vec<String> = read

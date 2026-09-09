@@ -85,7 +85,7 @@ async fn finds_string_buried_deep_in_line() -> std::result::Result<(), Box<dyn s
             .model(&model)
             .dir(root)
             .role(
-                "{context}\n\n\
+                "{{ context }}\n\n\
                  Investigate the working directory and answer the user's question. \
                  Use the available tools: pick whichever one fits. \
                  When you have the answer, settle the task via \
@@ -224,7 +224,7 @@ async fn reads_column_slice_after_grep_locates_needle(
             .model(&model)
             .dir(root)
             .role(
-                "{context}\n\n\
+                "{{ context }}\n\n\
                  Investigate the working directory and answer the user's question. \
                  Use the available tools: pick whichever one fits. \
                  When you have the answer, settle the task via \
