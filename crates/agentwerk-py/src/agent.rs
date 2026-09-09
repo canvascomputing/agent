@@ -11,7 +11,7 @@ use agentwerk::providers::{Model, Provider};
 use agentwerk::{Agent, Knowledge};
 use pyo3::prelude::*;
 
-use crate::convert::{py_to_text, runtime_error, value_to_py};
+use crate::convert::{py_to_templates, runtime_error, value_to_py};
 use crate::knowledge::PyKnowledge;
 use crate::providers::{PyModel, PyProvider};
 use crate::query::to_task_matcher;
@@ -108,15 +108,9 @@ impl PyAgent {
     }
 
     /// Define who the agent is and how it should work.
-    ///
-    /// A `str` is the role itself; an `os.PathLike` names the file holding it.
-    fn role<'py>(
-        mut slf: PyRefMut<'py, Self>,
-        role: &Bound<'_, PyAny>,
-    ) -> PyResult<PyRefMut<'py, Self>> {
-        let resolved = py_to_text(role)?;
-        slf.set(|agent| agent.role(resolved));
-        Ok(slf)
+    fn role(mut slf: PyRefMut<'_, Self>, role: String) -> PyRefMut<'_, Self> {
+        slf.set(|agent| agent.role(role));
+        slf
     }
 
     /// Restrict the agent to tasks carrying this label, and name it after
@@ -140,23 +134,22 @@ impl PyAgent {
         slf
     }
 
-    /// Inject data into prompts with template strings.
+    /// Insert or replace a shared template through this agent's Werk.
     ///
-    /// `{key}` is replaced in the role and in any text task. Binding `context`
-    /// replaces the built-in block the role expands, and binding one of its
-    /// value names, such as `task` or `turns_remaining`, replaces that value.
+    /// New tasks use the value before their first request; inserted values stay literal.
     fn template(mut slf: PyRefMut<'_, Self>, key: String, value: String) -> PyRefMut<'_, Self> {
         slf.set(|agent| agent.template(key, value));
         slf
     }
 
-    /// Inject more than one entry into prompts.
-    fn templates(
-        mut slf: PyRefMut<'_, Self>,
-        variables: BTreeMap<String, String>,
-    ) -> PyRefMut<'_, Self> {
+    /// Insert or replace shared templates together through the agent's Werk.
+    fn templates<'py>(
+        mut slf: PyRefMut<'py, Self>,
+        variables: &Bound<'_, pyo3::types::PyDict>,
+    ) -> PyResult<PyRefMut<'py, Self>> {
+        let variables = py_to_templates(variables)?;
         slf.set(|agent| agent.templates(variables));
-        slf
+        Ok(slf)
     }
 
     /// Set the directory the agent has access to.
@@ -217,9 +210,8 @@ impl PyAgent {
 
     /// Submit a task and return its task ID.
     ///
-    /// A `str` is the task itself, and an `os.PathLike` names the file holding
-    /// it. A `Task` carries a custom label or schema with it. Call it as often
-    /// as you like: one agent can work on many tasks.
+    /// A `str` is the task itself. A `Task` carries a custom label or schema
+    /// with it. Call it as often as you like: one agent can work on many tasks.
     fn add_task(&self, task: &Bound<'_, PyAny>) -> PyResult<String> {
         Ok(self.get().add_task(to_task(task)?))
     }

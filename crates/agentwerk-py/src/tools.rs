@@ -306,8 +306,7 @@ impl PyCommandTool {
 
     /// Override the auto-generated description.
     ///
-    /// A `str` is the description itself; an `os.PathLike` names the file
-    /// holding it.
+    /// The description shown to the model.
     fn description<'py>(
         mut slf: PyRefMut<'py, Self>,
         description: &Bound<'_, PyAny>,

@@ -62,6 +62,8 @@ impl Event {
     pub const REQUEST_STARTED: &'static str = "request_started";
     /// Event name emitted after a provider request succeeds.
     pub const REQUEST_FINISHED: &'static str = "request_finished";
+    /// A role or task expression could not be rendered before a request.
+    pub const PROMPT_RENDER_FAILED: &'static str = "prompt_render_failed";
     /// Event name emitted after a provider request fails.
     pub const REQUEST_FAILED: &'static str = "request_failed";
     /// Event name emitted before retrying a provider request.
@@ -112,6 +114,7 @@ impl Event {
         Self::REQUEST_STARTED,
         Self::REQUEST_FINISHED,
         Self::REQUEST_FAILED,
+        Self::PROMPT_RENDER_FAILED,
         Self::REQUEST_RETRIED,
         Self::TEXT_CHUNK_RECEIVED,
         Self::TOOL_CALL_REPAIRED,
@@ -192,6 +195,14 @@ impl Event {
     pub fn request_finished(model: impl Into<String>, usage: crate::providers::TokenUsage) -> Self {
         Self::new(Self::REQUEST_FINISHED)
             .data(serde_json::json!({ "model": model.into(), "usage": usage }))
+    }
+
+    /// Record a rendering failure before a provider request is sent.
+    pub fn prompt_render_failed(expression: &str, message: &str) -> Self {
+        Self::new(Self::PROMPT_RENDER_FAILED).data(serde_json::json!({
+            "expression": expression,
+            "message": message,
+        }))
     }
 
     /// Create a request-failed event.
@@ -596,6 +607,7 @@ fn default_log_message(event: &Event) -> Option<(char, String)> {
             (' ', log_tool_action(text("tool_name"), input)?)
         }
         Event::TOOL_CALL_FAILED => ('!', format!("{} failed{}", text("tool_name"), detail())),
+        Event::PROMPT_RENDER_FAILED => ('✗', format!("prompt render failed{}", detail())),
         Event::REQUEST_FAILED => ('✗', format!("request failed{}", detail())),
         Event::REQUEST_RETRIED | Event::SCHEMA_RETRIED => {
             let action = if event.name == Event::REQUEST_RETRIED {
@@ -1139,6 +1151,10 @@ pub(crate) mod tests {
                     "kind": "connection_failed",
                     "message": "offline",
                 }),
+            ),
+            (
+                Event::prompt_render_failed("result: missing", "no matching result"),
+                serde_json::json!({ "expression": "result: missing", "message": "no matching result" }),
             ),
             (
                 Event::request_retried("model", 2, 4, RequestErrorKind::RateLimited, "later"),

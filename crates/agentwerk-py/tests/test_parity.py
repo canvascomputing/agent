@@ -87,12 +87,14 @@ def test_every_exported_name_is_declared_in_the_stub():
 
 
 def test_removed_api_names_are_absent_from_runtime_exports_and_stub():
-    removed = {"TasksTool", "FetchUrlTool"}
+    removed = {"TasksTool", "FetchUrlTool", "Text", "RenderedText", "Prompt"}
     assert removed.isdisjoint(aw.__all__)
     assert removed.isdisjoint(stub_top_level_names())
     for name in ("Agent", "Werk"):
         assert "finish_all_tasks" not in stub_class_members(name)
         assert not hasattr(getattr(aw, name), "finish_all_tasks")
+    assert "render_prompt" not in stub_class_members("Werk")
+    assert not hasattr(aw.Werk, "render_prompt")
     assert "task" not in stub_class_members("Agent")
     assert "handover" not in stub_class_members("Agent")
     assert "get_parent" not in stub_class_members("Task")

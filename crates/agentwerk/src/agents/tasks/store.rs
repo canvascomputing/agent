@@ -35,7 +35,14 @@ impl Werk {
     /// Insert `task`, filling in the fields agentwerk owns. The task is always born
     /// `todo`; to pin it to a specific agent, label it with the agent's
     /// name. Returns the inserted task's ID.
-    pub(crate) fn insert(&self, mut task: Task, reporter: String) -> String {
+    pub(crate) fn insert(&self, task: Task, reporter: String) -> String {
+        let label = task.label;
+        let schema = task.schema;
+        let mut task = Task {
+            label,
+            schema,
+            ..Task::new(task.task)
+        };
         let id = {
             let mut next = self.next_task_id.lock().unwrap();
             let base = next.get_or_insert_with(|| max_existing_task_id(&self.get_dir()));
@@ -45,8 +52,6 @@ impl Werk {
         task.id = format!("t-{id}");
         task.created_at = now_millis();
         task.reporter = reporter;
-        task.result = None;
-        task.status = Status::Todo;
         task.cancelled = self
             .cancel_filters
             .lock()
@@ -200,15 +205,16 @@ impl Werk {
         // terminal event has been emitted: the drain check in `finish_tasks()`
         // must never observe (empty Werk, zero counter) mid-transition,
         // or it drains before an event handler can enqueue follow-up work.
-        struct InFlight<'a>(&'a std::sync::atomic::AtomicUsize);
-        impl Drop for InFlight<'_> {
+        struct FinishGuard<'a>(&'a Werk);
+        impl Drop for FinishGuard<'_> {
             fn drop(&mut self) {
-                self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                // The event precedes its handlers. Wake a waiter that consumed it
+                // while those handlers still kept the transition in flight.
+                self.0.terminal_transitions.send_modify(|count| *count -= 1);
             }
         }
-        self.terminal_transitions_in_flight
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let _in_flight = InFlight(&self.terminal_transitions_in_flight);
+        self.terminal_transitions.send_modify(|count| *count += 1);
+        let _finish = FinishGuard(self);
 
         let now = now_millis();
         let result = {
@@ -416,6 +422,28 @@ mod tests {
         let t = werk.get_task("t-1").unwrap();
         assert_eq!(t.label.as_deref(), Some("urgent"));
         assert!(t.schema.is_some());
+    }
+
+    #[test]
+    fn inserting_a_used_task_keeps_its_definition_without_its_execution() {
+        let (werk, _tmp) = test_werk();
+        let schema = crate::schemas::Schema::new(serde_json::json!({"type": "string"})).unwrap();
+        let mut used = Task::new("repeat").label("research").schema(schema);
+        used.status = Status::Finished;
+        used.assignee = Some("old-agent".into());
+        used.result = Some(serde_json::json!("old result"));
+        used.replies.push(Reply::system_text("old prompt"));
+
+        let id = werk.add_task(used);
+        let inserted = werk.get_task(&id).unwrap();
+
+        assert_eq!(inserted.get_task(), "repeat");
+        assert_eq!(inserted.get_label(), Some("research"));
+        assert!(inserted.get_schema().is_some());
+        assert_eq!(inserted.status, Status::Todo);
+        assert!(inserted.assignee.is_none());
+        assert!(inserted.result.is_none());
+        assert!(inserted.replies.is_empty());
     }
 
     #[test]

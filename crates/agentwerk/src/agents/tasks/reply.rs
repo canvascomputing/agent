@@ -9,10 +9,9 @@ use crate::providers::{ContentBlock, Message};
 
 use super::now_millis;
 
-/// Who wrote a reply. The agent loop writes `System`
-/// entries for the system prompt and for compaction boundaries; those
-/// are filtered when projecting replies back into `Message` values for
-/// the provider.
+/// Who wrote a reply. The agent loop writes a `System` entry for the frozen
+/// system prompt; it is filtered when projecting replies back into `Message`
+/// values for the provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Author {
@@ -164,8 +163,7 @@ impl Reply {
         }
     }
 
-    /// Build a system reply carrying a single text payload. Used
-    /// for the leading system-prompt entry and compaction boundaries.
+    /// Build a system reply carrying the frozen system prompt.
     pub(crate) fn system_text(text: impl Into<String>) -> Self {
         Self {
             author: Author::System,
@@ -176,8 +174,7 @@ impl Reply {
 
     /// Project this reply back into a provider [`Message`]. Returns
     /// `None` for `System` entries: the system prompt is passed via
-    /// `request.system_prompt`, and compaction-boundary replies are
-    /// audit markers only.
+    /// `request.system_prompt`.
     pub(crate) fn as_message(&self) -> Option<Message> {
         let content = self.content.iter().map(ReplyContent::to_block).collect();
         match self.author {

@@ -20,7 +20,7 @@ Where code, tests, bindings, examples, and repository guidance live.
 - `src/event.rs` owns `Event`; `src/persistence.rs` owns shared file primitives and stays crate-private.
 - `src/agents/` owns agent configuration, tasks, orchestration, policy, queries, statistics, retries, compaction, and knowledge.
 - `src/providers/`, `src/tools/`, and `src/schemas/` own LLM providers, agent actions, and result validation.
-- `src/prompts/` owns prompt assembly, `Text`, and the directive catalogue.
+- `src/prompts/prompt.rs` owns Werk's single-pass template substitution and AQL expressions. `prompts/mod.rs` supplies runtime string values and directives; Agent and Task pass source strings to Werk.
 
 ## Agents and Tasks
 
@@ -48,7 +48,7 @@ Where code, tests, bindings, examples, and repository guidance live.
 - `tools/tool.rs` owns the public `Tool` builder and internal execution context.
 - A built-in tool keeps its Rust implementation, `<name>.tool.md`, and `<name>.schema.json` together.
 - `tools/command/` and `tools/task/` use submodules because parsing and completion have separate concerns.
-- `prompts/directives.rs` indexes the entries under `prompts/directives/*.md`; `builder.rs`, `section.rs`, and `text.rs` assemble prompt text.
+- `prompts/directives.rs` indexes the entries under `prompts/directives/*.md`; `prompt.rs` contains private rendering, and `mod.rs` supplies runtime values.
 
 ## Python Bindings
 

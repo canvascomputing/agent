@@ -1,5 +1,6 @@
 //! One unit of work an agent picks up, and how it is stored.
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -8,7 +9,6 @@ use serde::Serialize;
 
 use crate::event::Event;
 use crate::persistence::Persist;
-use crate::prompts::Text;
 use crate::providers::{AsUserMessage, Message};
 
 use super::reply::{Author, Reply, ReplyContent};
@@ -90,7 +90,7 @@ impl Task {
     /// Create a task carrying `task`.
     ///
     /// Add a label and a schema with the chainable methods. Everything else is
-    /// filled in when the task is submitted.
+    /// filled in when the task is added.
     pub fn new<T: Serialize>(task: T) -> Self {
         let value = serde_json::to_value(task).expect("Task::new: value must serialize to JSON");
         Self {
@@ -253,10 +253,25 @@ impl Task {
         })
     }
 
+    pub(crate) fn initial_reply(
+        &self,
+        werk: &crate::Werk,
+    ) -> Result<Reply, crate::prompts::RenderError> {
+        let mut initial = self.clone();
+        if let serde_json::Value::String(text) = &self.task {
+            let text = werk.render_prompt(text, &[])?;
+            initial.task = serde_json::Value::String(text);
+        }
+        let Message::User { content } = initial.as_user_message() else {
+            unreachable!("Task::asUserMessage returns a user message");
+        };
+        Ok(Reply::user(&content, &HashMap::new()))
+    }
+
     /// Turn this task's replies into the messages sent to the model.
     ///
-    /// System-author replies are left out: the system prompt travels in its own
-    /// field, and a compaction marker is there for the record only.
+    /// System-author replies are left out: the frozen system prompt travels in
+    /// its own field.
     pub(crate) fn to_messages(&self) -> Vec<Message> {
         self.replies.iter().filter_map(Reply::as_message).collect()
     }
@@ -295,26 +310,6 @@ impl From<String> for Task {
 impl From<serde_json::Value> for Task {
     fn from(task: serde_json::Value) -> Self {
         Task::new(task)
-    }
-}
-
-/// The file holds the task. `Task::new(file)` stores the path itself, since
-/// there the value passed is the task.
-impl From<&Path> for Task {
-    fn from(file: &Path) -> Self {
-        Task::new(Text::from(file).into_string())
-    }
-}
-
-impl From<PathBuf> for Task {
-    fn from(file: PathBuf) -> Self {
-        Self::from(file.as_path())
-    }
-}
-
-impl From<&PathBuf> for Task {
-    fn from(file: &PathBuf) -> Self {
-        Self::from(file.as_path())
     }
 }
 
@@ -572,17 +567,6 @@ mod tests {
         );
         assert_eq!(
             Task::from("Audit src/db.".to_string()).task,
-            serde_json::json!("Audit src/db.")
-        );
-    }
-
-    #[test]
-    fn a_path_converts_into_a_task_carrying_the_file_as_the_task() {
-        let dir = crate::test_util::TempDir::new().unwrap();
-        let file = dir.path().join("task.md");
-        std::fs::write(&file, "Audit src/db.\n").unwrap();
-        assert_eq!(
-            Task::from(file.as_path()).task,
             serde_json::json!("Audit src/db.")
         );
     }
