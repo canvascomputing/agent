@@ -119,10 +119,11 @@ impl Agent {
     /// `.add_task(...)`, `.start()`, and `.finish()` work without one being set up.
     /// `Werk::add_agent(...)` later moves those tasks into the shared Werk.
     ///
-    /// Give it a provider and a model before it starts work.
+    /// Give it a provider and a model before it starts work. It begins with no
+    /// tools; joining a Werk registers [`FinishTool`] unless it is interactive.
     pub fn new() -> Self {
         let knowledge = Knowledge::load(".agentwerk/knowledge").expect("open knowledge store");
-        let mut agent = Self {
+        Self {
             id: OnceLock::new(),
             provider: None,
             model: None,
@@ -134,9 +135,7 @@ impl Agent {
             dir: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             knowledge,
             directives: Arc::new(DirectiveStore::default()),
-        };
-        agent.register_tool(KnowledgeTool::new(Arc::clone(&agent.knowledge)));
-        agent
+        }
     }
 
     /// Create an agent with the provider and model from the environment.
@@ -259,9 +258,9 @@ impl Agent {
     /// Share a knowledge store, the durable memory the agent carries across
     /// tasks and shares with other agents.
     ///
-    /// It replaces the store opened by default, both for what the prompt shows
-    /// and for what `KnowledgeTool` writes to. Hand the same store to
-    /// several agents to share it between them.
+    /// It replaces the store opened by default for what the prompt shows and
+    /// registers a [`KnowledgeTool`] bound to it. Hand the same store to several
+    /// agents to share it between them.
     pub fn knowledge(mut self, store: &Arc<Knowledge>) -> Self {
         self.register_tool(KnowledgeTool::new(Arc::clone(store)));
         self.knowledge = Arc::clone(store);
@@ -1092,7 +1091,7 @@ mod tests {
     }
 
     #[test]
-    fn new_agent_has_the_knowledge_tool_registered() {
+    fn new_agent_does_not_have_the_knowledge_tool_registered() {
         let agent = Agent::new();
         let registry = agent.tool_list();
         let names: Vec<String> = registry
@@ -1100,8 +1099,8 @@ mod tests {
             .map(|tool| tool.get_name().to_string())
             .collect();
         assert!(
-            names.iter().any(|n| n == "knowledge"),
-            "knowledge must be registered on every new agent: {names:?}",
+            names.iter().all(|n| n != "knowledge"),
+            "knowledge must be registered explicitly: {names:?}",
         );
     }
 

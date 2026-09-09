@@ -158,8 +158,7 @@ impl PyAgent {
         slf
     }
 
-    /// Share a knowledge store, the durable memory the agent carries across
-    /// tasks and shares with other agents.
+    /// Share a knowledge store and register its knowledge tool.
     fn knowledge<'py>(
         mut slf: PyRefMut<'py, Self>,
         store: PyRef<'_, PyKnowledge>,

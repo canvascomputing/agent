@@ -12,8 +12,8 @@ use crate::prompts::directives::{
 use super::tool::{Tool, ToolContext};
 
 /// The model's four-action handle on a `Knowledge` store:
-/// `write`, `read`, `remove`, `list`. Registered automatically on every
-/// agent; `Agent::knowledge` rebinds it to the passed store.
+/// `write`, `read`, `remove`, `list`. `Agent::knowledge` registers it with
+/// the passed store.
 ///
 /// # Examples
 ///

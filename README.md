@@ -120,7 +120,7 @@ The [prompt skill](skills/prompt/SKILL.md) provides a compact template for writi
 | | `templates(variables)` | Set several shared templates together. |
 | | `directive(key, template)` | Set a directive template by key. |
 | | `directives(overrides)` | Set more than one directive template. |
-| | `knowledge(store)` | Share a knowledge store with the agent. |
+| | `knowledge(store)` | Share a knowledge store and register its `KnowledgeTool`. |
 | | `interactive()` | Let the agent wait for new instructions to keep a task in-progress. |
 | **Work** | `add_task(task)` | Submit a task, or a `Task` carrying a label or schema, and return its task ID. |
 | | `start()` | Keep processing tasks in the background. |
@@ -1065,7 +1065,7 @@ let alice = Agent::new().knowledge(&store);
 let bob = Agent::new().knowledge(&store);
 ```
 
-Agents configured with a store can read and update its shared pages through `KnowledgeTool`.
+Calling `.knowledge(&store)` registers a `KnowledgeTool` bound to that store, so the agent can read and update its shared pages.
 
 <details>
 <summary>Knowledge reference</summary>
