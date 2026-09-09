@@ -8,7 +8,7 @@ use std::time::Duration;
 use crate::agents::agent::Agent;
 use crate::agents::knowledge::Knowledge;
 use crate::agents::policy::Policy;
-use crate::agents::tasks::{Task, Werk};
+use crate::agents::tasks::{FinishReason, Task, Werk};
 use crate::event::Event;
 use crate::providers::types::{ModelResponse, ResponseStatus, TokenUsage};
 use crate::providers::{ContentBlock, Message, ProviderError, ProviderResult};
@@ -325,7 +325,6 @@ pub async fn run_one(
             max_request_retries,
             request_retry_delay: Duration::from_millis(1),
             max_schema_retries: Some(max_schema_retries),
-            max_time: Some(Duration::from_millis(200)),
             ..Default::default()
         });
 
@@ -345,7 +344,10 @@ pub async fn run_one(
         werk.add_task("go");
     }
 
-    let _ = werk.finish().await;
+    tokio::time::timeout(Duration::from_secs(5), werk.finish())
+        .await
+        .expect("test run did not finish within 5s");
+    assert_eq!(werk.get_finish_reason(), Some(FinishReason::Drained));
     let events = collected.lock().unwrap().clone();
     let task = werk
         .get_tasks()
