@@ -5,6 +5,7 @@ use std::fmt;
 
 use serde_json::Value;
 
+use super::json_path::JsonPath;
 use crate::{Query, Werk};
 
 /// An expression that could not be rendered.
@@ -126,53 +127,59 @@ fn resolve_expression(
     named_value: &mut impl FnMut(&str) -> Option<String>,
 ) -> Result<Option<String>, RenderError> {
     let expression = expression.trim();
-    let (expanded, nested) =
-        expand_nested(expression, named_value).map_err(|message| RenderError {
-            expression: expression.to_string(),
-            message,
-        })?;
-    let expanded = expanded.trim();
-
-    if let Some(inner) = readable_expression(expanded).map_err(|message| RenderError {
+    resolve_expression_value(werk, expression, named_value).map_err(|message| RenderError {
         expression: expression.to_string(),
         message,
-    })? {
-        let Some((kind, query)) = result_expression(inner) else {
-            return Err(RenderError {
-                expression: expression.to_string(),
-                message: "readable expects a result: or results: expression".into(),
-            });
+    })
+}
+
+fn resolve_expression_value(
+    werk: &Werk,
+    expression: &str,
+    named_value: &mut impl FnMut(&str) -> Option<String>,
+) -> Result<Option<String>, String> {
+    if let Some(inner) = readable_expression(expression)? {
+        let Some(result) = result_expression(inner) else {
+            return Err("readable expects a result: or results: expression".into());
         };
-        if !matches!(kind, "result" | "results") {
-            return Err(RenderError {
-                expression: expression.to_string(),
-                message: "readable expects a result: or results: expression".into(),
-            });
+        if !result.kind.selects_values() {
+            return Err("readable expects a result: or results: expression".into());
         }
-        return select_result(werk, kind, query)
-            .map(|value| Some(readable(&value)))
-            .map_err(|message| RenderError {
-                expression: expression.to_string(),
-                message,
-            });
+        let value = resolve_result(werk, result, named_value)?;
+        return Ok(Some(readable(&value)));
     }
 
-    if let Some((kind, query)) = result_expression(expanded) {
-        return select_result(werk, kind, query)
-            .map(|value| Some(result_text(value, is_plural(kind))))
-            .map_err(|message| RenderError {
-                expression: expression.to_string(),
-                message,
-            });
+    if let Some(result) = result_expression(expression) {
+        let value = resolve_result(werk, result, named_value)?;
+        return Ok(Some(result_text(value)));
     }
 
-    if nested {
-        return Err(RenderError {
-            expression: expression.to_string(),
-            message: "nested values are only supported inside result expressions".into(),
-        });
+    let (expanded, had_nested_value) = expand_nested(expression, named_value)?;
+    if had_nested_value {
+        return Err("nested values are only supported inside result expressions".into());
     }
-    Ok(named_value(expanded))
+    Ok(named_value(expanded.trim()))
+}
+
+fn resolve_result(
+    werk: &Werk,
+    result: ResultExpression<'_>,
+    named_value: &mut impl FnMut(&str) -> Option<String>,
+) -> Result<Value, String> {
+    let (query, _had_nested_value) = expand_nested(result.query, named_value)?;
+    if result.json_path.is_some() && !result.kind.selects_values() {
+        return Err("JSON paths require result: or results:".into());
+    }
+    let json_path = result
+        .json_path
+        .map(JsonPath::parse)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let value = select_result(werk, result.kind, query.trim())?;
+    let Some(json_path) = json_path else {
+        return Ok(value);
+    };
+    Ok(json_path.evaluate(&value))
 }
 
 fn expand_nested(
@@ -217,32 +224,136 @@ fn readable_expression(expression: &str) -> Result<Option<&str>, String> {
     Ok(Some(body.trim()))
 }
 
-fn result_expression(expression: &str) -> Option<(&str, &str)> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResultKind {
+    Result,
+    Results,
+    ResultPath,
+    ResultPaths,
+}
+
+impl ResultKind {
+    fn parse(source: &str) -> Option<Self> {
+        Some(match source {
+            "result" => Self::Result,
+            "results" => Self::Results,
+            "result_path" => Self::ResultPath,
+            "result_paths" => Self::ResultPaths,
+            _ => return None,
+        })
+    }
+
+    fn selects_values(self) -> bool {
+        matches!(self, Self::Result | Self::Results)
+    }
+
+    fn is_plural(self) -> bool {
+        matches!(self, Self::Results | Self::ResultPaths)
+    }
+
+    fn uses_file_paths(self) -> bool {
+        matches!(self, Self::ResultPath | Self::ResultPaths)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ResultExpression<'a> {
+    kind: ResultKind,
+    query: &'a str,
+    json_path: Option<&'a str>,
+}
+
+fn result_expression(expression: &str) -> Option<ResultExpression<'_>> {
     let (kind, query) = expression.split_once(':')?;
-    let kind = kind.trim();
-    matches!(kind, "result" | "results" | "result_path" | "result_paths")
-        .then_some((kind, query.trim()))
+    let kind = ResultKind::parse(kind.trim())?;
+    let (query, json_path) = split_json_path(query);
+    Some(ResultExpression {
+        kind,
+        query: query.trim(),
+        json_path: json_path.map(str::trim),
+    })
+}
+
+fn split_json_path(source: &str) -> (&str, Option<&str>) {
+    let mut quote = None;
+    let mut escaped = false;
+    let mut parenthesis_depth = 0usize;
+    let mut inside_nested_expression = false;
+    let mut byte_offset = 0;
+    while byte_offset < source.len() {
+        let remaining = &source[byte_offset..];
+        if inside_nested_expression {
+            if remaining.starts_with(EXPRESSION_CLOSE) {
+                inside_nested_expression = false;
+                byte_offset += EXPRESSION_CLOSE.len();
+                continue;
+            }
+            let character = remaining.chars().next().expect("remaining is nonempty");
+            byte_offset += character.len_utf8();
+            continue;
+        }
+        if remaining.starts_with(EXPRESSION_OPEN) {
+            inside_nested_expression = true;
+            byte_offset += EXPRESSION_OPEN.len();
+            continue;
+        }
+
+        let character = remaining.chars().next().expect("remaining is nonempty");
+        if let Some(delimiter) = quote {
+            if escaped {
+                escaped = false;
+            } else if character == '\\' {
+                escaped = true;
+            } else if character == delimiter {
+                quote = None;
+            }
+            byte_offset += character.len_utf8();
+            continue;
+        }
+        match character {
+            '\'' | '"' => quote = Some(character),
+            '(' => parenthesis_depth += 1,
+            ')' => parenthesis_depth = parenthesis_depth.saturating_sub(1),
+            '|' if parenthesis_depth == 0 && is_json_path_separator(source, byte_offset) => {
+                return (
+                    &source[..byte_offset],
+                    Some(&source[byte_offset + character.len_utf8()..]),
+                );
+            }
+            _ => {}
+        }
+        byte_offset += character.len_utf8();
+    }
+    (source, None)
+}
+
+fn is_json_path_separator(source: &str, byte_offset: usize) -> bool {
+    let before = &source[..byte_offset];
+    let after = &source[byte_offset + '|'.len_utf8()..];
+    let has_space_before = before.chars().next_back().is_some_and(char::is_whitespace);
+    let has_space_after = after.is_empty() || after.chars().next().is_some_and(char::is_whitespace);
+    has_space_before && has_space_after
 }
 
 /// Nested placeholders may appear in quoted AQL; ordinary braces remain data.
 fn expression_end(body: &str) -> Result<Option<usize>, &'static str> {
     let mut brace_depth = 0;
-    let mut nested = false;
+    let mut inside_nested_expression = false;
     let mut quote = None;
     let mut escaped = false;
-    let mut index = 0;
-    while index < body.len() {
-        let remaining = &body[index..];
-        if nested {
+    let mut byte_offset = 0;
+    while byte_offset < body.len() {
+        let remaining = &body[byte_offset..];
+        if inside_nested_expression {
             if remaining.starts_with(EXPRESSION_OPEN) {
                 return Err("nested expressions may only be one level deep");
             }
             if remaining.starts_with(EXPRESSION_CLOSE) {
-                nested = false;
-                index += EXPRESSION_CLOSE.len();
+                inside_nested_expression = false;
+                byte_offset += EXPRESSION_CLOSE.len();
                 continue;
             }
-            index += remaining
+            byte_offset += remaining
                 .chars()
                 .next()
                 .expect("remaining is nonempty")
@@ -250,59 +361,55 @@ fn expression_end(body: &str) -> Result<Option<usize>, &'static str> {
             continue;
         }
         if remaining.starts_with(EXPRESSION_OPEN) {
-            nested = true;
-            index += EXPRESSION_OPEN.len();
+            inside_nested_expression = true;
+            byte_offset += EXPRESSION_OPEN.len();
             continue;
         }
 
-        let ch = remaining.chars().next().expect("remaining is nonempty");
+        let character = remaining.chars().next().expect("remaining is nonempty");
         if let Some(delimiter) = quote {
             if escaped {
                 escaped = false;
-            } else if ch == '\\' {
+            } else if character == '\\' {
                 escaped = true;
-            } else if ch == delimiter {
+            } else if character == delimiter {
                 quote = None;
             }
-            index += ch.len_utf8();
+            byte_offset += character.len_utf8();
             continue;
         }
-        match ch {
-            '\'' | '"' => quote = Some(ch),
+        match character {
+            '\'' | '"' => quote = Some(character),
             '{' => brace_depth += 1,
             '}' if brace_depth > 0 => brace_depth -= 1,
-            '}' if remaining.starts_with(EXPRESSION_CLOSE) => return Ok(Some(index)),
+            '}' if remaining.starts_with(EXPRESSION_CLOSE) => return Ok(Some(byte_offset)),
             _ => {}
         }
-        index += ch.len_utf8();
+        byte_offset += character.len_utf8();
     }
-    if nested {
+    if inside_nested_expression {
         Err("unclosed nested expression")
     } else {
         Ok(None)
     }
 }
 
-fn is_plural(kind: &str) -> bool {
-    matches!(kind, "results" | "result_paths")
-}
-
-fn select_result(werk: &Werk, kind: &str, query: &str) -> Result<Value, String> {
+fn select_result(werk: &Werk, kind: ResultKind, query: &str) -> Result<Value, String> {
     let query = Query::new(query).map_err(|error| error.to_string())?;
     let mut tasks = werk.result_tasks(query);
-    let plural = is_plural(kind);
-    if !plural && tasks.is_empty() {
+    let is_plural = kind.is_plural();
+    if !is_plural && tasks.is_empty() {
         return Err("no matching result".into());
     }
-    if !plural {
+    if !is_plural {
         tasks.truncate(1);
     }
-    let use_paths = matches!(kind, "result_path" | "result_paths");
+    let use_file_paths = kind.uses_file_paths();
     let values = tasks
         .iter()
-        .map(|task| result_value(werk, task, use_paths))
+        .map(|task| result_value(werk, task, use_file_paths))
         .collect::<Result<Vec<_>, _>>()?;
-    if plural {
+    if is_plural {
         return Ok(Value::Array(values));
     }
     Ok(values
@@ -311,9 +418,9 @@ fn select_result(werk: &Werk, kind: &str, query: &str) -> Result<Value, String> 
         .expect("singular selection is nonempty"))
 }
 
-fn result_text(value: Value, plural: bool) -> String {
+fn result_text(value: Value) -> String {
     match value {
-        Value::String(text) if !plural => text,
+        Value::String(text) => text,
         value => value.to_string(),
     }
 }
@@ -555,6 +662,162 @@ mod tests {
         assert_eq!(
             render(&werk, format!("{{{{ result: {second} }}}}")).unwrap(),
             r#"{"answer":42}"#
+        );
+    }
+
+    #[test]
+    fn result_json_paths_render_fields_and_structured_values() {
+        let (werk, _dir) = session();
+        let id = werk.add_task(Task::labeled("research", "go"));
+        werk.set_task_finished(
+            &id,
+            serde_json::json!({
+                "company": {"name": "Acme"},
+                "findings": [{"summary": "one"}],
+                "}}": "closed",
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            render(&werk, "{{ result: research | company.name }}").unwrap(),
+            "Acme"
+        );
+        assert_eq!(
+            render(&werk, "{{ result: research | findings[0] }}").unwrap(),
+            r#"{"summary":"one"}"#
+        );
+        assert_eq!(
+            render(&werk, "{{ result: research | company.missing }}").unwrap(),
+            "null"
+        );
+        assert_eq!(
+            render(&werk, r#"{{ result: research | "}}" }}"#).unwrap(),
+            "closed"
+        );
+    }
+
+    #[test]
+    fn plural_result_json_paths_use_the_selected_array_as_the_root() {
+        let (werk, _dir) = session();
+        for verdict in ["safe", "review"] {
+            let id = werk.add_task(Task::labeled("scan", "go"));
+            werk.set_task_finished(&id, serde_json::json!({"verdict": verdict}))
+                .unwrap();
+        }
+
+        assert_eq!(
+            render(&werk, "{{ results: scan | [*].verdict }}").unwrap(),
+            r#"["safe","review"]"#
+        );
+        assert_eq!(
+            render(&werk, "{{ results: scan | [0].verdict }}").unwrap(),
+            "safe"
+        );
+        assert_eq!(
+            render(&werk, "{{ results: missing | [*].verdict }}").unwrap(),
+            "[]"
+        );
+    }
+
+    #[test]
+    fn readable_formats_the_selected_json_path_value() {
+        let (werk, _dir) = session();
+        let id = werk.add_task(Task::labeled("research", "go"));
+        werk.set_task_finished(
+            &id,
+            serde_json::json!({"findings": [{"summary": "one"}, {"summary": "two"}]}),
+        )
+        .unwrap();
+
+        assert_eq!(
+            render(
+                &werk,
+                "{{ readable(result: research | findings[*].summary) }}",
+            )
+            .unwrap(),
+            "- one\n- two"
+        );
+    }
+
+    #[test]
+    fn json_path_boundaries_ignore_quoted_aql_pipes() {
+        let (werk, _dir) = session();
+        let id = werk.add_task(Task::labeled("research | notes", "go"));
+        werk.set_task_finished(&id, serde_json::json!({"answer": "found"}))
+            .unwrap();
+        let compact = werk.add_task(Task::labeled("research|notes", "go"));
+        werk.set_task_finished(&compact, serde_json::json!("compact"))
+            .unwrap();
+
+        assert_eq!(
+            render(
+                &werk,
+                r#"{{ result: task.label = "research | notes" | answer }}"#,
+            )
+            .unwrap(),
+            "found"
+        );
+        assert_eq!(
+            render(&werk, "{{ result: research|notes }}").unwrap(),
+            "compact"
+        );
+    }
+
+    #[test]
+    fn json_path_boundaries_ignore_parenthesized_and_nested_pipes() {
+        assert_eq!(
+            split_json_path("task.label IN (one | two) | answer"),
+            ("task.label IN (one | two) ", Some(" answer"))
+        );
+        assert_eq!(
+            split_json_path("{{ selection | literal }} | answer"),
+            ("{{ selection | literal }} ", Some(" answer"))
+        );
+        assert_eq!(split_json_path("research|notes"), ("research|notes", None));
+    }
+
+    #[test]
+    fn result_file_paths_cannot_have_json_paths() {
+        let (werk, _dir) = session();
+        let id = werk.add_task("go");
+        werk.set_task_finished(&id, serde_json::json!({"answer": "done"}))
+            .unwrap();
+
+        let error = render(&werk, format!("{{{{ result_path: {id} | answer }}}}")).unwrap_err();
+
+        assert_eq!(error.message, "JSON paths require result: or results:");
+    }
+
+    #[test]
+    fn json_paths_are_static_and_fail_closed() {
+        let (werk, _dir) = session();
+        let id = werk.add_task(Task::labeled("research", "go"));
+        werk.set_task_finished(&id, serde_json::json!({"answer": "found"}))
+            .unwrap();
+        werk.set_templates([("selection", "research | answer"), ("path", "answer")]);
+
+        for prompt in [
+            "{{ result: research | }}",
+            "{{ result: research | answer || missing }}",
+            "{{ result: research | {{ path }} }}",
+            "{{ result: {{ selection }} }}",
+        ] {
+            assert!(render(&werk, prompt).is_err(), "{prompt}");
+        }
+    }
+
+    #[test]
+    fn strings_selected_by_json_paths_are_not_rendered_again() {
+        let (werk, _dir) = session();
+        let id = werk.add_task(Task::labeled("research", "go"));
+        werk.set_task_finished(&id, serde_json::json!({"answer": "{{ company }}"}))
+            .unwrap();
+        werk.set_template("company", "Acme");
+
+        assert_eq!(
+            render(&werk, "{{ result: research | answer }}").unwrap(),
+            "{{ company }}"
         );
     }
 

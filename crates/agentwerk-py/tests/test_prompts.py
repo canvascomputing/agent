@@ -55,6 +55,27 @@ async def test_direct_aql_expressions_resolve_results_and_paths(
     )
 
 
+async def test_result_json_paths_navigate_selected_json(werk, scripted_openai):
+    first = werk.add_task(aw.Task("first", label="research"))
+    second = werk.add_task(aw.Task("second", label="research"))
+    werk.set_task_finished(first, {"company": {"name": "Acme"}})
+    werk.set_task_finished(second, {"company": {"name": "Canvas"}})
+    scripted_openai.respond_with_tool("finish", {"answer": "done"})
+    werk.add_agent(
+        aw.Agent()
+        .provider(scripted_openai.provider())
+        .model("mock")
+        .role("{{ result: research | company.name }}")
+    )
+    werk.add_task("{{ results: research | [*].company.name }}")
+
+    await asyncio.wait_for(werk.finish(), timeout=5)
+
+    messages = scripted_openai.requests[0]["messages"]
+    assert messages[0]["content"] == "Acme"
+    assert messages[1]["content"] == '["Acme","Canvas"]'
+
+
 async def test_nested_query_values_and_readable_results(
     werk, scripted_openai
 ):

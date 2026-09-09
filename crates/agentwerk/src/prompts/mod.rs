@@ -2,6 +2,7 @@
 //! `{{ context }}` expands to.
 
 pub(crate) mod directives;
+mod json_path;
 mod prompt;
 
 use std::path::Path;
