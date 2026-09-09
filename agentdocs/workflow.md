@@ -94,13 +94,18 @@ make use_case name=deep-research args="What is a good life?"
 
 **Use `make bump` only when a versioned release is intended.**
 
+Run it from `main`, and push the version commit before the tag. The publish
+workflow rejects tags whose commit is not contained in `origin/main`.
+
 ```bash
 make bump
 make bump part=minor
 make bump part=major
-git push && git push --tags
+git push
+git push --tags
 ```
 
 - The target runs tests, updates both crate versions, commits, and creates a `v<version>` tag.
 - Omit `part` for a patch release; use only `patch`, `minor`, or `major`.
-- GitHub Actions publishes after the tag is pushed.
+- GitHub Actions reruns the offline Rust and Python suites and preflights both
+  packages before publishing to PyPI, then crates.io.

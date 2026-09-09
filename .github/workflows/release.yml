@@ -3,7 +3,55 @@ on:
   push:
     tags: ['v*']
 jobs:
+  verify-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Require the tagged commit on main
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" FETCH_HEAD; then
+            echo "::error::Release tags must point to a commit contained in origin/main"
+            exit 1
+          fi
+
+  rust-tests:
+    needs: verify-main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: make test
+
+  python-tests:
+    needs: verify-main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: sudo apt-get update && sudo apt-get install -y ripgrep
+      - run: python -m venv .venv
+      - run: .venv/bin/python -m pip install maturin pytest pytest-asyncio
+      - run: .venv/bin/maturin develop --manifest-path crates/agentwerk-py/Cargo.toml
+      - run: .venv/bin/python -m pytest crates/agentwerk-py/tests -q -m 'not live'
+
+  crate:
+    name: crate dry run
+    needs: verify-main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo publish -p agentwerk --dry-run
+
   wheels:
+    needs: verify-main
     name: wheels ${{ matrix.platform.runner }} ${{ matrix.platform.target }}
     runs-on: ${{ matrix.platform.runner }}
     strategy:
@@ -29,6 +77,7 @@ jobs:
           path: crates/agentwerk-py/dist
 
   sdist:
+    needs: verify-main
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -43,7 +92,7 @@ jobs:
           path: crates/agentwerk-py/dist
 
   publish-wheels:
-    needs: [wheels, sdist]
+    needs: [rust-tests, python-tests, crate, wheels, sdist]
     runs-on: ubuntu-latest
     environment: release
     permissions:

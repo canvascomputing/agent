@@ -49,13 +49,20 @@ make use_case name=deep-research args="What is a good life?"  # with arguments
 
 ## Publishing
 
+Run releases from `main`. Push the version bump commit before its tag; the
+publish workflow rejects tags whose commit is not contained in `origin/main`.
+
 ```bash
 make bump                  # bump patch version, run tests, commit, tag
 make bump part=minor       # bump minor version
 make bump part=major       # bump major version
+git push                   # push the version commit to main first
+git push --tags            # trigger the gated publish workflow
 ```
 
-GitHub Actions handles the crates.io publish via trusted publishing once the new tag is pushed (`git push --tags`).
+GitHub Actions builds both packages and reruns the offline Rust and Python test
+suites before publishing to PyPI, then crates.io. No registry publish starts
+unless every test and package preflight succeeds.
 
 ## Documentation
 

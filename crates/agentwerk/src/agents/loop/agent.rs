@@ -300,7 +300,7 @@ mod tests {
 
     use crate::agents::agent::Agent;
     use crate::agents::r#loop::test_util::*;
-    use crate::agents::tasks::{Author, Status, Task, Werk};
+    use crate::agents::tasks::{Author, FinishReason, Status, Task, Werk};
     use crate::agents::Knowledge;
     use crate::tools::{EventTool, TaskTool};
 
@@ -1453,7 +1453,6 @@ mod tests {
             .set_policy(Policy {
                 max_request_retries: 0,
                 request_retry_delay: Duration::from_millis(1),
-                max_time: Some(Duration::from_millis(500)),
                 ..Default::default()
             });
         werk.add_agent(
@@ -1465,7 +1464,10 @@ mod tests {
         );
         werk.add_task("first");
         werk.add_task("second");
-        let _ = werk.finish().await;
+        tokio::time::timeout(Duration::from_secs(5), werk.finish())
+            .await
+            .expect("cross-task knowledge run did not finish within 5s");
+        assert_eq!(werk.get_finish_reason(), Some(FinishReason::Drained));
 
         let prompts = provider.received_system_prompts();
         assert_eq!(prompts.len(), 3);
