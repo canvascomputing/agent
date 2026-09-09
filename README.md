@@ -162,7 +162,7 @@ werk.finish().await;
 werk.set_task_finished(&id, "answered")?;
 ```
 
-Replies pause the task in `in_progress`, and completion methods return when it pauses. Use `add_reply(id, content)` to resume and `set_task_finished(id, result)` to end the conversation. Intermediate replies arrive as [events](#events); `on_result` receives the final result.
+Replies pause the task in `in_progress`, and completion methods return when it pauses. Use `add_reply(id, content)` to resume and `set_task_finished(id, result)` to end the conversation. Intermediate replies arrive as [events](#events). `on_result` receives the final result.
 
 See [`Agent`](https://docs.rs/agentwerk/latest/agentwerk/agents/agent/struct.Agent.html).
 
@@ -332,9 +332,9 @@ werk.find_results("t-3");
 | **Search** | `field ~ text`, `field !~ text` | Include or exclude case-insensitive text. |
 | **Compare** | `field > value`, `>=`, `<`, `<=` | Compare a time field. |
 | **Combine** | `A AND B`, `A OR B`, `NOT A`, `(A OR B)` | Combine or group conditions. |
-| **Task label** | `scan`, `"needs review"` | Short for `task.label = scan`; quote labels containing spaces or query words. |
-| **Task ID** | `t-3` | Short for `task.id = t-3`; IDs take precedence over labels. |
-| **Sort** | `ORDER BY field DESC` | Sort matches; `ASC` is the default. |
+| **Task label** | `scan`, `"needs review"` | Short for `task.label = scan`. Quote labels containing spaces or query words. |
+| **Task ID** | `t-3` | Short for `task.id = t-3`. IDs take precedence over labels. |
+| **Sort** | `ORDER BY field DESC` | Sort matches. `ASC` is the default. |
 
 #### Fields
 
@@ -343,7 +343,7 @@ werk.find_results("t-3");
 | **Task** | `task.id`, `task.label`, `task.status`, `task.pending`, `task.cancelled`, `task.assignee`, `task.input`, `task.result`, `task.errors`, `task.created`, `task.started`, `task.finished`, `task.failed` |
 | **Event** | `event.name`, `event.agent_id`, `event.task_id`, `event.label`, `event.created`, `event.data` |
 
-Queries using both namespaces match events with their referenced tasks. Events without an existing task do not match. Joined matches default to event-log order; `ORDER BY` accepts task or event fields.
+Queries using both namespaces match events with their referenced tasks. Events without an existing task do not match. Joined matches default to event-log order. `ORDER BY` accepts task or event fields.
 
 Result finders return raw results where `task.result` is present. They select finished tasks unless the query specifies another status.
 
@@ -353,9 +353,9 @@ Completion methods and `cancel_tasks` also accept AQL. Event and joined queries 
 
 Missing values do not match `!=`. Include unlabeled tasks with `task.label IS EMPTY OR task.label != scan`.
 
-Qualify fields in full expressions. Use parentheses when mixing `AND` and `OR`; `NOT` applies to the next condition or group. Query keywords ignore case; labels and IDs do not.
+Qualify fields in full expressions. Use parentheses when mixing `AND` and `OR`. `NOT` applies to the next condition or group. Query keywords ignore case. Labels and IDs do not.
 
-Times accept UTC dates such as `2026-08-30`, epoch milliseconds, or offsets such as `-30m`, `-2h`, `-7d`, and `-1w`. Offsets are resolved when a query is compiled; reusing a compiled query keeps its original cutoff.
+Times accept UTC dates such as `2026-08-30`, epoch milliseconds, or offsets such as `-30m`, `-2h`, `-7d`, and `-1w`. Offsets are resolved when a query is compiled. Reusing a compiled query keeps its original cutoff.
 
 Missing sort values come last in either direction. Tasks and results selected through events follow matching event order, with each task returned once. Events selected through tasks follow task order, then log order within each task.
 
@@ -484,7 +484,7 @@ agentwerk fills placeholders in the role and task just before each task's first 
 | Expression | Output |
 |---|---|
 | `{{ name }}` | The value assigned to `name`. |
-| `{{ result: AQL }}` | The first result; strings as text, other values as compact JSON. |
+| `{{ result: AQL }}` | The first result. Strings appear as text and other values as compact JSON. |
 | `{{ results: AQL }}` | A compact JSON array of matching results. |
 | `{{ result_path: AQL }}` | The absolute path of the first matching result file. |
 | `{{ result_paths: AQL }}` | A JSON array of absolute result file paths. |
@@ -576,7 +576,7 @@ werk.add_task(Task::new("Write a report.").schema(schema));
 <details>
 <summary>Schema reference</summary>
 
-Agentwerk corrects common result-formatting mistakes, such as a quoted number or a nested object encoded as JSON text. Schema-bound results must be objects; remaining schema violations trigger a retry, subject to `max_schema_retries`. Without a schema, a task may return any JSON value.
+Agentwerk corrects common result-formatting mistakes, such as a quoted number or a nested object encoded as JSON text. Schema-bound results must be objects. Remaining schema violations trigger a retry, subject to `max_schema_retries`. Without a schema, a task may return any JSON value.
 
 Use shallow, focused schemas for small models. Split complex work into tasks with separate schemas.
 
@@ -612,7 +612,7 @@ werk.set_policy(Policy {
 | `max_input_tokens` | Limit the total input tokens. |
 | `max_output_tokens` | Limit the total output tokens. |
 | `max_request_tokens` | Limit the output tokens of a single request. |
-| `max_schema_retries` | Limit consecutive failed tool calls or silent replies; a successful call resets the count. |
+| `max_schema_retries` | Limit consecutive failed tool calls or silent replies. A successful call resets the count. |
 | `max_request_retries` | Limit how often a failing request is retried. |
 | `request_retry_delay` | Set the base delay for exponential backoff between request retries. |
 | `compaction_threshold` | Compact once the next request would fill this share of the window. |
@@ -667,7 +667,7 @@ let agent = Agent::from_env()
 <details>
 <summary>Directive reference</summary>
 
-Built-in keys override recovery text; keys without overrides retain their defaults. Templates accept runtime values such as `{{ detail }}`, `{{ attempt }}`, and `{{ path }}`. Placeholders without a value remain unchanged.
+Built-in keys override recovery text. Keys without overrides retain their defaults. Templates accept runtime values such as `{{ detail }}`, `{{ attempt }}`, and `{{ path }}`. Placeholders without a value remain unchanged.
 
 See [prompts/directives](https://github.com/canvascomputing/agentwerk/tree/main/crates/agentwerk/src/prompts/directives) for the built-in text.
 
@@ -756,7 +756,7 @@ To return a result, the agent must call `FinishTool`. If the task has a result s
 
 #### Timeouts
 
-Override a tool's limit with `timeout(duration)`; zero disables it.
+Override a tool's limit with `timeout(duration)`. Zero disables it.
 
 ```rust
 use std::time::Duration;
@@ -792,7 +792,7 @@ The model supplies a name and optional JSON data:
 }
 ```
 
-Events carry the current task and agent context; see [Events](#events) for hooks and queries. Names are unrestricted; lowercase snake case is conventional.
+Events carry the current task and agent context. See [Events](#events) for hooks and queries. Names are unrestricted. Lowercase snake case is conventional.
 
 Only `task_finished` completes the current task. Its `data` is the result object:
 
@@ -954,14 +954,14 @@ Events are saved to `.agentwerk/events.jsonl`, except `text_chunk_received`.
 | `get_agent_id()` | Read the associated agent ID. |
 | `get_label()` | Read the associated task's label. |
 | `get_created_at()` | Read the timestamp in epoch milliseconds. |
-| `directive(value)` | Set directive metadata; this does not send an instruction to the model. |
+| `directive(value)` | Set directive metadata. This does not send an instruction to the model. |
 | `get_directive()` | Read the directive metadata. |
 
 When no event hook is installed, `event::default_logger()` logs events.
 
 #### Query events
 
-Query events with AQL or a predicate; see [Queries](#queries) for shared syntax.
+Query events with AQL or a predicate. See [Queries](#queries) for shared syntax.
 
 ```rust
 werk.find_events("event.name = tool_call_failed");
@@ -996,7 +996,7 @@ See [`Event`](https://docs.rs/agentwerk/latest/agentwerk/event/struct.Event.html
 | | `on_task(handler)` | Read task state changes. |
 | | `on_task_async(handler)` | Read task state changes in an async hook. |
 
-`on_result` runs synchronously on the agent; keep it brief. Use `on_result_async` for work that needs to await.
+`on_result` runs synchronously on the agent. Keep it brief. Use `on_result_async` for work that needs to await.
 
 Async hooks run while a completion method is waiting, and finish before it returns. `start()` alone does not run them. Do not call `finish`, `finish_task`, or `finish_tasks` inside an async hook: it can deadlock.
 
@@ -1034,7 +1034,7 @@ Pages use the Open Knowledge Format (OKF) and are stored at `./notes/pages/<slug
 | `get_pages().get_all()` | Get every page in the store. |
 | `clear()` | Remove every page from the store. |
 
-By default, prompts include up to 12,000 characters of the index; agents can read the rest from `index.md`. Pages are always saved in full.
+By default, prompts include up to 12,000 characters of the index. Agents can read the rest from `index.md`. Pages are always saved in full.
 
 Create entries in code:
 
