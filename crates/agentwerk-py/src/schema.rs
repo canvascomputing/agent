@@ -14,7 +14,7 @@ pub struct PySchema {
 
 #[pymethods]
 impl PySchema {
-    /// Create a schema from a dict, or from any JSON-like value.
+    /// Create a schema from a dict declaring top-level `type: object`.
     #[new]
     fn new(document: &Bound<'_, PyAny>) -> PyResult<Self> {
         let inner = Schema::new(py_to_value(document)?).map_err(runtime_error)?;
@@ -22,7 +22,7 @@ impl PySchema {
     }
 
     /// Validate content and give back the value to keep, plus the JSON pointer
-    /// of every value it repaired. Quoted JSON values come back retyped;
+    /// of every nested value it repaired. Quoted JSON values come back retyped;
     /// string enums may be corrected for case or outer whitespace, but never
     /// converted to another JSON type. Raises on a violation.
     fn validate<'py>(

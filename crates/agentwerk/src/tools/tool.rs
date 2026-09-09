@@ -1290,10 +1290,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn arguments_the_model_quoted_whole_are_decoded_before_the_tool_runs() {
+    async fn arguments_the_model_quoted_whole_are_rejected() {
         let (content, succeeded) = call_typed(Value::String(r#"{"count": 3}"#.into())).await;
-        assert!(succeeded);
-        assert_eq!(content, "3");
+        assert!(!succeeded);
+        assert!(content.contains("expected type object"), "{content}");
     }
 
     #[tokio::test]
@@ -1320,9 +1320,10 @@ mod tests {
         let result = typed_result(serde_json::json!({"count": "3"})).await;
         assert_eq!(result.repairs().collect::<Vec<_>>(), vec!["/count retyped"]);
 
-        // No pointer names a whole payload the model wrote as text.
+        // The root arguments must be an object and are not repaired from text.
         let result = typed_result(Value::String(r#"{"count": 3}"#.into())).await;
-        assert_eq!(result.repairs().collect::<Vec<_>>(), vec!["retyped"]);
+        assert_eq!(result.get_name(), Event::TOOL_CALL_FAILED);
+        assert!(result.repairs().next().is_none());
     }
 
     #[tokio::test]

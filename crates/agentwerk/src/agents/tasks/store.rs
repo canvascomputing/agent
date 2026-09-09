@@ -158,11 +158,11 @@ impl Werk {
         self.set_final_status(id, Status::Finished, agent)
     }
 
-    /// Attach `result` to the task and transition it to `finished`,
-    /// resolving it from outside the run. Validates against the task's
-    /// schema first, so a host finish and an agent finish record the same
-    /// contract. The emitted `task_finished` carries an empty agent ID,
-    /// like the run-level events no single agent causes.
+    /// Attach the result value to the task and transition it to `finished`,
+    /// resolving it from outside the run. A schema-less task accepts any
+    /// serializable JSON value; a schema-bound task validates it first. The
+    /// emitted `task_finished` carries an empty agent ID, like the run-level
+    /// events no single agent causes.
     ///
     /// ```no_run
     /// # use agentwerk::Werk;
@@ -241,14 +241,14 @@ impl Werk {
         };
         let mut event = Event::new(name).task_id(id).agent_id(agent);
         if let (Status::Finished, Some(result)) = (status, result) {
-            event = event.data(serde_json::json!({ "result": result }));
+            event = event.data(result);
         }
         self.emit_event(event);
         self.save_task(id);
         Ok(())
     }
 
-    /// Validate `result` against the task's schema, write it to the task's
+    /// Validate `result` when the task has a schema, write it to the task's
     /// `result.json`, and store the validated result on the task, which it
     /// returns alongside the JSON pointer of every value validation repaired to
     /// accept it. Does not finish the task: the caller does.
@@ -417,7 +417,11 @@ mod tests {
     #[test]
     fn create_with_label_and_schema_is_stored_verbatim() {
         let (werk, _tmp) = test_werk();
-        let schema = crate::schemas::Schema::new(serde_json::json!({"type": "string"})).unwrap();
+        let schema = crate::schemas::Schema::new(serde_json::json!({
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+        }))
+        .unwrap();
         werk.add_task(Task::new("x").label("urgent").schema(schema));
         let t = werk.get_task("t-1").unwrap();
         assert_eq!(t.label.as_deref(), Some("urgent"));
@@ -427,11 +431,15 @@ mod tests {
     #[test]
     fn inserting_a_used_task_keeps_its_definition_without_its_execution() {
         let (werk, _tmp) = test_werk();
-        let schema = crate::schemas::Schema::new(serde_json::json!({"type": "string"})).unwrap();
+        let schema = crate::schemas::Schema::new(serde_json::json!({
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+        }))
+        .unwrap();
         let mut used = Task::new("repeat").label("research").schema(schema);
         used.status = Status::Finished;
         used.assignee = Some("old-agent".into());
-        used.result = Some(serde_json::json!("old result"));
+        used.result = Some(serde_json::json!({"answer": "old result"}));
         used.replies.push(Reply::system_text("old prompt"));
 
         let id = werk.add_task(used);
@@ -450,16 +458,12 @@ mod tests {
     fn set_result_updates_task() {
         let (werk, _tmp) = test_werk();
         werk.add_task("hi");
-        werk.set_result("t-1", serde_json::Value::String("answer".into()))
+        werk.set_result("t-1", serde_json::json!({"answer": "answer"}))
             .unwrap();
         let stored = werk.get_task("t-1").unwrap();
         assert_eq!(
             stored.result.as_ref(),
-            Some(&serde_json::Value::String("answer".into()))
-        );
-        assert_eq!(
-            stored.result.as_ref().and_then(|v| v.as_str()),
-            Some("answer")
+            Some(&serde_json::json!({"answer": "answer"}))
         );
     }
 
@@ -684,27 +688,20 @@ mod tests {
         let lines = read_events_log(dir.path());
         let event = lines.last().unwrap();
         assert_eq!(event["name"], Event::TASK_FINISHED);
-        assert_eq!(event["data"]["result"], serde_json::json!({"answer": 42}));
+        assert_eq!(event["data"], serde_json::json!({"answer": 42}));
     }
 
     #[test]
-    fn task_finished_event_distinguishes_no_result_from_null() {
+    fn task_finished_event_carries_an_empty_result_object() {
         let (werk, dir) = test_werk();
-        let without = werk.add_task("without");
-        werk.set_finished_by(&without, "alice").unwrap();
-        let with_null = werk.add_task("with null");
-        werk.set_task_finished(&with_null, ()).unwrap();
+        let id = werk.add_task("empty result");
+        werk.set_task_finished(&id, serde_json::json!({})).unwrap();
 
         let lines = read_events_log(dir.path());
-        let finished: Vec<&serde_json::Value> = lines
-            .iter()
-            .filter(|event| event["name"] == Event::TASK_FINISHED)
-            .collect();
-        assert!(finished[0]["data"].get("result").is_none());
-        assert_eq!(
-            finished[1]["data"].get("result"),
-            Some(&serde_json::Value::Null)
-        );
+        assert!(lines.last().unwrap()["data"]
+            .as_object()
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -713,13 +710,17 @@ mod tests {
         let werk = Werk::new();
         werk.set_dir(dir.path().to_path_buf());
         let id = werk.add_task("hello");
-        werk.set_task_finished(&id, "done").unwrap();
+        werk.set_task_finished(&id, serde_json::json!({"answer": "done"}))
+            .unwrap();
         drop(werk);
 
         let resumed = Werk::load(dir.path()).unwrap();
         let event = resumed.find_event("event.name = task_finished").unwrap();
-        assert_eq!(event.get_data()["result"], "done");
-        assert_eq!(resumed.get_results(), vec![serde_json::json!("done")]);
+        assert_eq!(event.get_data()["answer"], "done");
+        assert_eq!(
+            resumed.get_results(),
+            vec![serde_json::json!({"answer": "done"})]
+        );
     }
 
     #[test]
@@ -738,7 +739,8 @@ mod tests {
         let (werk, _tmp) = test_werk();
         let id = werk.add_task("hello");
         werk.claim(&Query::from("task.status = todo"), "alice");
-        werk.set_task_finished(&id, "host result").unwrap();
+        werk.set_task_finished(&id, serde_json::json!({"answer": "host result"}))
+            .unwrap();
 
         // Alice was still turning the task and gives up after the host
         // resolved it.
@@ -746,13 +748,16 @@ mod tests {
 
         let task = werk.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
-        assert_eq!(task.result, Some(serde_json::json!("host result")));
+        assert_eq!(
+            task.result,
+            Some(serde_json::json!({"answer": "host result"}))
+        );
         assert!(task.failed_at.is_none());
         let terminal = werk.find_events(|event: &Event| {
             matches!(event.get_name(), Event::TASK_FINISHED | Event::TASK_FAILED)
         });
         assert_eq!(terminal.len(), 1);
-        assert_eq!(terminal[0].get_data()["result"], "host result");
+        assert_eq!(terminal[0].get_data()["answer"], "host result");
     }
 
     #[test]
@@ -762,7 +767,8 @@ mod tests {
         werk.claim(&Query::from("task.status = todo"), "alice");
         werk.set_failed_by(&id, "alice").unwrap();
 
-        werk.set_task_finished(&id, "late result").unwrap();
+        werk.set_task_finished(&id, serde_json::json!({"answer": "late result"}))
+            .unwrap();
 
         let task = werk.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Failed);
@@ -807,8 +813,54 @@ mod tests {
     #[test]
     fn set_finished_errors_on_an_unknown_id() {
         let (werk, _tmp) = test_werk();
-        let err = werk.set_task_finished("t-9", "done").unwrap_err();
+        let err = werk
+            .set_task_finished("t-9", serde_json::json!({"answer": "done"}))
+            .unwrap_err();
         assert!(matches!(err, TaskError::TaskNotFound { .. }));
+    }
+
+    #[test]
+    fn set_finished_accepts_every_json_value_without_a_schema() {
+        for value in [
+            serde_json::json!("done"),
+            serde_json::json!(42),
+            serde_json::json!(true),
+            serde_json::json!(["one", 2]),
+            serde_json::json!({"answer": "done"}),
+            serde_json::Value::Null,
+        ] {
+            let (werk, _tmp) = test_werk();
+            let id = werk.add_task("hello");
+
+            werk.set_task_finished(&id, &value).unwrap();
+
+            let task = werk.get_task(&id).unwrap();
+            assert_eq!(task.status, Status::Finished);
+            assert_eq!(task.result.as_ref(), Some(&value));
+            let event = werk
+                .find_event("event.name = task_finished")
+                .expect("task_finished event");
+            assert_eq!(event.get_data(), &value);
+        }
+    }
+
+    #[test]
+    fn set_finished_rejects_a_scalar_against_an_object_schema() {
+        let (werk, _tmp) = test_werk();
+        let schema = crate::schemas::Schema::new(serde_json::json!({
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+        }))
+        .unwrap();
+        let id = werk.add_task(Task::new("hello").schema(schema));
+
+        let err = werk.set_task_finished(&id, "done").unwrap_err();
+
+        assert!(matches!(err, TaskError::ResultRejected { .. }));
+        let task = werk.get_task(&id).unwrap();
+        assert_eq!(task.status, Status::Todo);
+        assert!(task.result.is_none());
     }
 
     #[test]
@@ -905,6 +957,26 @@ mod tests {
     }
 
     #[test]
+    fn load_keeps_a_scalar_result_file_written_by_an_older_session() {
+        let dir = crate::test_util::TempDir::new().unwrap();
+        let original = Werk::new();
+        original.set_dir(dir.path().to_path_buf());
+        original.add_task("legacy work");
+        std::fs::write(
+            dir.path().join("tasks/t-1/result.json"),
+            "\"legacy answer\"",
+        )
+        .unwrap();
+        drop(original);
+
+        let resumed = Werk::load(dir.path()).unwrap();
+        assert_eq!(
+            resumed.get_task("t-1").unwrap().result,
+            Some(serde_json::json!("legacy answer"))
+        );
+    }
+
+    #[test]
     fn insert_after_load_never_reuses_an_existing_id() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let original = Werk::new();
@@ -972,7 +1044,7 @@ mod tests {
         original.set_dir(dir.path().to_path_buf());
         original.add_task("a");
         original.add_task("b");
-        original.set_result("t-1", serde_json::Value::Null).unwrap();
+        original.set_result("t-1", serde_json::json!({})).unwrap();
         original.set_finished_by("t-1", "agent").unwrap();
         original.set_task_failed("t-2").unwrap();
         drop(original);
@@ -1188,7 +1260,7 @@ mod tests {
         werk.add_task("seed");
         werk.claim(&Query::from("task.status = todo"), "alice")
             .unwrap();
-        werk.set_result("t-1", serde_json::Value::Null).unwrap();
+        werk.set_result("t-1", serde_json::json!({})).unwrap();
         werk.set_finished_by("t-1", "agent").unwrap();
 
         assert_eq!(werk.find_events("event.name = task_created").len(), 1);

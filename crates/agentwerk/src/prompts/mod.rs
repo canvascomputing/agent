@@ -183,24 +183,23 @@ mod tests {
     }
 
     #[test]
-    fn every_schema_shape_asks_for_the_result_argument() {
+    fn every_result_schema_asks_for_a_matching_object() {
         let shapes = [
             serde_json::json!({
                 "type": "object",
                 "properties": {"summary": {"type": "string"}},
                 "required": ["summary"],
             }),
-            // A task field named like the result argument needs no special prose.
+            // `result` has no special meaning when it is an ordinary field.
             serde_json::json!({
                 "type": "object",
                 "properties": { "result": { "type": "string" } },
             }),
-            serde_json::json!({ "type": "string" }),
         ];
 
         for shape in shapes {
             let directive = schema_directive(&Schema::new(shape).expect("valid schema"));
-            assert!(directive.contains("`result`"), "{directive}");
+            assert!(directive.contains("JSON object"), "{directive}");
             assert!(directive.contains("matching this schema"), "{directive}");
         }
     }

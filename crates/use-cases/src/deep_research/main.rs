@@ -85,8 +85,12 @@ async fn main() {
     // terminal-reply path then transitions the task to `failed`
     // rather than silently `Done`. Result hooks keep the stages going.
     let starter_schema = Schema::new(serde_json::json!({
-        "type": "string",
-        "minLength": 100
+        "type": "object",
+        "properties": {
+            "research": {"type": "string", "minLength": 100}
+        },
+        "required": ["research"],
+        "additionalProperties": false
     }))
     .expect("starter schema is well-formed");
     werk.add_task(
@@ -116,7 +120,7 @@ fn route_research_results(werk: &Arc<Werk>, report_schema: Schema) {
                 "researcher_2",
                 serde_json::json!({
                     "question": done.get_task()["question"].clone(),
-                    "researcher_1": result,
+                    "researcher_1": result["research"].clone(),
                     "instruction": "Deepen and broaden these facts with causes, consequences, criticisms, or alternative perspectives."
                 }),
             ));
@@ -128,7 +132,7 @@ fn route_research_results(werk: &Arc<Werk>, report_schema: Schema) {
                     serde_json::json!({
                         "question": done.get_task()["question"].clone(),
                         "researcher_1": done.get_task()["researcher_1"].clone(),
-                        "researcher_2": result
+                        "researcher_2": result["research"].clone()
                     }),
                 )
                 .schema(report_schema.clone()),
@@ -460,12 +464,16 @@ mod tests {
             serde_json::json!({"question": "Why?"}),
         ));
 
-        werk.set_task_finished(&first, "first findings").unwrap();
+        werk.set_task_finished(&first, serde_json::json!({"research": "first findings"}))
+            .unwrap();
         let second = werk.find_task("task.label = researcher_2").unwrap();
         assert_eq!(second.get_task()["researcher_1"], "first findings");
 
-        werk.set_task_finished(second.get_id(), "second findings")
-            .unwrap();
+        werk.set_task_finished(
+            second.get_id(),
+            serde_json::json!({"research": "second findings"}),
+        )
+        .unwrap();
         let reports = werk.find_tasks("task.label = report");
         assert_eq!(reports.len(), 1);
         assert_eq!(reports[0].get_task()["researcher_1"], "first findings");

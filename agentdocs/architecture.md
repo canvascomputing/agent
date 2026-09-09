@@ -46,11 +46,13 @@ The invariants that govern orchestration, tools, providers, events, and durable 
 
 ## Completion
 
-**Finish tasks through the completion engine owned by `EventTool` and wrapped by `FinishTool`.**
+**Preserve one result value across every completion path.**
 
-- Register `FinishTool` automatically for non-interactive agents; interactive agents pause and the host ends them with `Werk::set_task_finished`.
-- Bind an object `Schema` directly as the finish arguments; keep scalar and unbound results in the legacy `result` envelope.
-- Treat `EventTool`'s `task_finished` event as completion; every other published event remains observational.
+- Give batch agents `FinishTool`; interactive agents pause and the host ends them with `Werk::set_task_finished`.
+- Complete a schema-less batch task from a normal plain-text response, preserving its text verbatim. A host may finish such a task with any JSON value.
+- Require every result `Schema` to declare a top-level object, bind its fields directly as the `finish` arguments, and keep schema-bound completion tool-driven.
+- Treat `EventTool`'s `task_finished` data as the direct result object; every other published event remains observational.
+- Preserve the result value unchanged through result hooks, task files, reloads, events, and `Werk::set_task_finished`.
 - Run synchronous result hooks before a finish becomes observable as drained, so a hook can file follow-up work safely. Wake completion waiters after terminal transitions finish, because the event itself precedes the handlers.
 - Move `Status` only through task-store transitions; reserve `Status::Failed` for system-driven terminal outcomes.
 

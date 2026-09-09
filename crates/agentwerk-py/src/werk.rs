@@ -68,8 +68,8 @@ impl PyWerk {
 
     /// Finish a task with a result, from outside the execution.
     ///
-    /// Raises when the ID is unknown, or when the result misses the task's
-    /// schema.
+    /// Without a schema, `result` may be any JSON-compatible value. Raises
+    /// when the ID is unknown, or when the result misses the task's schema.
     fn set_task_finished(&self, id: &str, result: &Bound<'_, PyAny>) -> PyResult<()> {
         self.inner
             .set_task_finished(id, py_to_value(result)?)

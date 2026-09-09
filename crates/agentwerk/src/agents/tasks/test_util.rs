@@ -46,7 +46,7 @@ pub(super) fn test_werk() -> (Arc<Werk>, crate::test_util::TempDir) {
 }
 
 pub(super) fn attach_done_result(werk: &Werk, id: &str, result: &str) {
-    werk.set_result(id, serde_json::Value::String(result.into()))
+    werk.set_result(id, serde_json::json!({"answer": result}))
         .unwrap();
     werk.set_finished_by(id, "agent").unwrap();
 }

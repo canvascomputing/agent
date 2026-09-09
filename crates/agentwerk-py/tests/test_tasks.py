@@ -79,7 +79,7 @@ def test_task_predicates_follow_label_status_and_cancellation(werk):
     assert not cancelled.is_pending()
 
     finished_key = werk.add_task("finish")
-    werk.set_task_finished(finished_key, "done")
+    werk.set_task_finished(finished_key, {"answer": "done"})
     assert werk.get_task(finished_key).is_finished()
 
     failed_key = werk.add_task("fail")
@@ -131,24 +131,35 @@ def test_schema_validate_returns_the_value_to_keep_and_no_repair():
     assert schema.validate({"status": "done"}) == ({"status": "done"}, [])
 
 
-def test_schema_validate_decodes_a_double_encoded_value():
+def test_schema_validate_rejects_a_double_encoded_root_object():
     schema = aw.Schema({"type": "object", "required": ["status"]})
-    kept, repaired = schema.validate('{"status": "done"}')
-    assert kept == {"status": "done"}
-    assert repaired == [""]
+    with pytest.raises(RuntimeError, match="expected type object"):
+        schema.validate('{"status": "done"}')
 
 
 def test_schema_validate_preserves_a_quoted_large_integer():
-    schema = aw.Schema({"type": "number"})
-    kept, repaired = schema.validate("9007199254740993")
-    assert kept == 9007199254740993
-    assert repaired == [""]
+    schema = aw.Schema(
+        {
+            "type": "object",
+            "properties": {"value": {"type": "number"}},
+            "required": ["value"],
+        }
+    )
+    kept, repaired = schema.validate({"value": "9007199254740993"})
+    assert kept == {"value": 9007199254740993}
+    assert repaired == ["/value"]
 
 
 def test_schema_validate_does_not_fold_a_string_into_a_non_string_enum():
-    schema = aw.Schema({"enum": [None]})
+    schema = aw.Schema(
+        {
+            "type": "object",
+            "properties": {"value": {"enum": [None]}},
+            "required": ["value"],
+        }
+    )
     with pytest.raises(RuntimeError):
-        schema.validate("null")
+        schema.validate({"value": "null"})
 
 
 def test_schema_validate_rejects_a_violating_value():
@@ -157,9 +168,18 @@ def test_schema_validate_rejects_a_violating_value():
         schema.validate({})
 
 
-def test_invalid_schema_document_is_rejected_with_runtime_error():
-    with pytest.raises(RuntimeError):
-        aw.Schema({"type": "not-a-real-type"})
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"type": "string"},
+        {"type": "array"},
+        {"type": "boolean"},
+        {},
+    ],
+)
+def test_schema_requires_an_object_root(document):
+    with pytest.raises(RuntimeError, match="top-level type must be object"):
+        aw.Schema(document)
 
 
 def test_config_returns_the_werk_so_calls_chain(werk):
@@ -318,6 +338,35 @@ def test_set_finished_resolves_a_task_with_its_result(werk):
 
     assert werk.get_task(id).get_status() == "finished"
     assert werk.get_results()[-1] == {"verdict": "clean"}
+
+
+@pytest.mark.parametrize(
+    "result", ["clean", 42, True, None, ["clean", 42], {"verdict": "clean"}]
+)
+def test_set_finished_accepts_every_json_value_without_a_schema(werk, result):
+    id = werk.add_task(aw.Task("scan the corpus"))
+
+    werk.set_task_finished(id, result)
+
+    assert werk.get_task(id).get_status() == "finished"
+    assert werk.get_task(id).get_result() == result
+
+
+def test_set_finished_rejects_a_scalar_against_an_object_schema(werk):
+    schema = aw.Schema(
+        {
+            "type": "object",
+            "properties": {"answer": {"type": "string"}},
+            "required": ["answer"],
+        }
+    )
+    id = werk.add_task(aw.Task("answer", schema=schema))
+
+    with pytest.raises(RuntimeError, match="expected type object"):
+        werk.set_task_finished(id, "clean")
+
+    assert werk.get_task(id).get_status() == "todo"
+    assert werk.get_task(id).get_result() is None
 
 
 def test_set_finished_rejects_a_result_that_misses_the_schema(werk):
@@ -646,10 +695,13 @@ def test_a_hook_reads_the_results_that_landed_before_it(werk):
     first = werk.add_task(aw.Task("scan a.py"))
     second = werk.add_task(aw.Task("scan b.py"))
 
-    werk.set_task_finished(first, "clean")
-    werk.set_task_finished(second, "malicious")
+    werk.set_task_finished(first, {"verdict": "clean"})
+    werk.set_task_finished(second, {"verdict": "malicious"})
 
-    assert seen == [["clean"], ["clean", "malicious"]]
+    assert seen == [
+        [{"verdict": "clean"}],
+        [{"verdict": "clean"}, {"verdict": "malicious"}],
+    ]
 
 
 def test_a_hook_waits_for_the_results_it_needs_before_filing_the_next_step(werk):
@@ -657,16 +709,16 @@ def test_a_hook_waits_for_the_results_it_needs_before_filing_the_next_step(werk)
         results = callback_werk.get_results()
         if len(results) == 2:
             for result in results:
-                callback_werk.add_task(aw.Task(result, label="review"))
+                callback_werk.add_task(aw.Task(result["verdict"], label="review"))
 
     werk.on_result(review_once_both_landed)
     first = werk.add_task(aw.Task("scan a.py"))
     second = werk.add_task(aw.Task("scan b.py"))
 
-    werk.set_task_finished(first, "clean")
+    werk.set_task_finished(first, {"verdict": "clean"})
     assert werk.find_tasks(lambda t: t.get_label() == "review") == []
 
-    werk.set_task_finished(second, "malicious")
+    werk.set_task_finished(second, {"verdict": "malicious"})
     filed = [t.get_task() for t in werk.find_tasks(lambda t: t.get_label() == "review")]
     assert filed == ["clean", "malicious"]
 
@@ -832,8 +884,8 @@ async def test_on_result_async_finishes_one_handler_before_starting_the_next(wer
     werk.on_result_async(persist)
     first = werk.add_task("scan a.py")
     second = werk.add_task("scan b.py")
-    werk.set_task_finished(first, "clean")
-    werk.set_task_finished(second, "clean")
+    werk.set_task_finished(first, {"verdict": "clean"})
+    werk.set_task_finished(second, {"verdict": "clean"})
 
     await werk.finish()
 
@@ -874,7 +926,7 @@ async def test_on_task_async_awaits_the_handler_before_finish_all_returns(werk):
 
     werk.on_task_async(note)
     id = werk.add_task("scan the corpus")
-    werk.set_task_finished(id, "clean")
+    werk.set_task_finished(id, {"verdict": "clean"})
 
     await werk.finish()
 
@@ -906,7 +958,7 @@ async def test_on_event_async_sees_the_kinds_no_task_hook_accepts(werk):
 
     werk.on_event_async(note)
     id = werk.add_task("scan the corpus")
-    werk.set_task_finished(id, "clean")
+    werk.set_task_finished(id, {"verdict": "clean"})
 
     await werk.finish()
 
@@ -937,7 +989,7 @@ async def test_on_result_async_runs_the_handler_on_the_callers_event_loop(werk):
 
     werk.on_result_async(persist)
     id = werk.add_task("scan the corpus")
-    werk.set_task_finished(id, "clean")
+    werk.set_task_finished(id, {"verdict": "clean"})
 
     await werk.finish()
 

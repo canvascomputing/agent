@@ -159,7 +159,10 @@ mod tests {
         let resolved = id.clone();
         werk.on_event(move |_, event| {
             if event.get_name() == Event::REQUEST_FINISHED {
-                let _ = host.set_task_finished(&resolved, "resolved by the host");
+                let _ = host.set_task_finished(
+                    &resolved,
+                    serde_json::json!({"answer": "resolved by the host"}),
+                );
             }
         });
 
@@ -167,7 +170,10 @@ mod tests {
 
         let task = werk.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
-        assert_eq!(task.result, Some(serde_json::json!("resolved by the host")));
+        assert_eq!(
+            task.result,
+            Some(serde_json::json!({"answer": "resolved by the host"}))
+        );
         assert_eq!(provider.requests(), 1);
     }
 
