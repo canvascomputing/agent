@@ -1,6 +1,6 @@
 ## Context
 
-{context}
+{{ context }}
 
 ## Role
 

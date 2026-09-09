@@ -618,7 +618,7 @@ The rules the tables never repeat.
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | `.initial_reply(werk: Werk): Reply throws RenderError` | crate |
+| Rust | `.initial_reply(werk: Werk, context_values: [string, string][]): Reply throws RenderError` | crate |
 | Rust | `.is_waiting_for_response(): boolean` | crate |
 | Rust | `.is_paused(): boolean` | crate |
 | Rust | `.cancelled: boolean`: transient and excluded from serialization | crate |
@@ -1011,10 +1011,10 @@ Not bound directly: callers configure its crate-private store through `Agent.dir
 
 | Language | Item | Visibility |
 |----------|------|------------|
-| Rust | crate-private key constants, one per catalogue heading: `REPLY_REJECTED`, `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_TIMED_OUT`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_TOO_LONG`, `FETCH_SCHEME_MISSING`, `FETCH_SCHEME_UNSUPPORTED`, `FETCH_CREDENTIALS_PRESENT`, `FETCH_HOST_MISSING`, `FETCH_HOST_NOT_RESOLVABLE`, `FETCH_TOO_MANY_REDIRECTS`, `FETCH_REQUEST_FAILED`, `FETCH_BODY_NOT_READ`, `FETCH_RESPONSE_TOO_LARGE`, `FETCH_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `WERK_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | crate |
+| Rust | crate-private key constants, one per directive heading: `REPLY_REJECTED`, `NO_TOOL_CALLED`, `ARGUMENTS_REJECTED`, `ARGUMENTS_EXPECTED`, `RESULT_SCHEMA_REQUIRED`, `SUMMARY_REQUESTED`, `KNOWLEDGE_INDEX_TRUNCATED`, `TOOL_NOT_FOUND`, `NO_TOOLS_REGISTERED`, `TOOL_PANICKED`, `TOOL_TIMED_OUT`, `TOOL_OUTPUT_EMPTY`, `TOOL_OUTPUT_OFFLOADED`, `EDIT_FILE_READ_FAILED`, `EDIT_FILE_OLD_STRING_NOT_FOUND`, `EDIT_FILE_OLD_STRING_NOT_UNIQUE`, `EDIT_FILE_WRITE_FAILED`, `WRITE_FILE_PARENT_NOT_CREATED`, `WRITE_FILE_FAILED`, `READ_FILE_PATH_IS_DIRECTORY`, `READ_FILE_PATH_IS_DIRECTORY_WITH_ENTRIES`, `READ_FILE_IS_BINARY`, `READ_FILE_NOT_FOUND`, `READ_FILE_FAILED`, `LIST_DIRECTORY_PATH_IS_FILE`, `LIST_DIRECTORY_NOT_FOUND`, `LIST_DIRECTORY_FAILED`, `PATH_HINT_DIRECTORY_LISTED`, `PATH_HINT_SUGGESTION`, `PATH_HINT_WORKING_DIRECTORY`, `COMMAND_CANCELLED`, `COMMAND_NOT_STARTED`, `COMMAND_MISSING`, `COMMAND_SHELL_OPERATOR_FOUND`, `COMMAND_QUOTE_UNTERMINATED`, `COMMAND_CONTROL_CHARACTER_FOUND`, `COMMAND_ASSIGNMENT_FOUND`, `COMMAND_FLAG_DENIED`, `COMMAND_PATTERN_DENIED`, `COMMAND_NOT_ALLOWED`, `COMMAND_FLAG_NOT_ALLOWED`, `GREP_CANCELLED`, `GREP_FAILED`, `GREP_GLOB_REJECTED`, `GREP_FILE_TYPE_UNKNOWN`, `GREP_PATTERN_REJECTED`, `CODE_PATTERN_REJECTED`, `CODE_CONSTRAINT_INCOMPLETE`, `CODE_CONSTRAINT_METAVARIABLE_UNKNOWN`, `CODE_CONSTRAINT_REGEX_REJECTED`, `FETCH_TOO_LONG`, `FETCH_SCHEME_MISSING`, `FETCH_SCHEME_UNSUPPORTED`, `FETCH_CREDENTIALS_PRESENT`, `FETCH_HOST_MISSING`, `FETCH_HOST_NOT_RESOLVABLE`, `FETCH_TOO_MANY_REDIRECTS`, `FETCH_REQUEST_FAILED`, `FETCH_BODY_NOT_READ`, `FETCH_RESPONSE_TOO_LARGE`, `FETCH_REDIRECT_LOCATION_MISSING`, `KNOWLEDGE_PAGE_NOT_FOUND`, `KNOWLEDGE_WRITE_FAILED`, `KNOWLEDGE_REMOVE_FAILED`, `WERK_UNAVAILABLE`, `TASK_ID_MISSING`, `TASK_NOT_ASSIGNED`, `TASK_NOT_FOUND`, `TASK_RESULT_MISSING`, `TASK_QUERY_INVALID`, `TASK_EDIT_INCOMPLETE`, `TASK_TRANSITION_REJECTED`, `SCHEMA_FALSE_REJECTED`, `SCHEMA_TYPE_MISMATCHED`, `SCHEMA_CONST_MISMATCHED`, `SCHEMA_ENUM_MISMATCHED`, `SCHEMA_ANY_OF_UNMATCHED`, `SCHEMA_ONE_OF_AMBIGUOUS`, `SCHEMA_NOT_MATCHED`, `SCHEMA_PROPERTY_MISSING`, `SCHEMA_PROPERTY_UNEXPECTED`, `SCHEMA_ARRAY_TOO_SHORT`, `SCHEMA_ARRAY_TOO_LONG`, `SCHEMA_STRING_TOO_SHORT`, `SCHEMA_STRING_TOO_LONG`, `SCHEMA_PATTERN_UNMATCHED`, `SCHEMA_NUMBER_TOO_SMALL`, `SCHEMA_NUMBER_TOO_LARGE`, `SCHEMA_HINT_UNQUOTE`, `SCHEMA_HINT_JSON`, `SCHEMA_HINT_QUOTE` | crate |
 | Rust | `directives!(name = key, ..)`, declaring each crate-private key constant and its `ALL` entry | private |
 | Rust | `ALL: string[]` | private, test only |
-| Rust | `CATALOGUE: string[]` | private |
+| Rust | `DIRECTIVES: string[]` | private |
 | Rust | `DirectiveStore { overrides: Record<string, string> }` | crate |
 | Rust | `impl Clone, Default for DirectiveStore` | crate |
 | Rust | `.insert(key: string, template: string): void` | crate |
@@ -1022,9 +1022,8 @@ Not bound directly: callers configure its crate-private store through `Agent.dir
 | Rust | `.render_override(key: string, values: [string, string][]): string?` | crate |
 | Rust | `impl Debug for DirectiveStore` | crate |
 | Rust | `built_in(key: string, values: [string, string][]): string` | crate |
-| Rust | `bind(template: string, values: [string, string][]): string` | private |
 | Rust | `entries(markdown: string): [string, string][]` | private |
-| Rust | `catalogue(): Record<string, string>` | private |
+| Rust | `directives(): Record<string, string>` | private |
 
 ## `crates/agentwerk/src/prompts/mod.rs`
 
@@ -1055,13 +1054,20 @@ Not bound: prompt preparation and rendering are private Werk behavior.
 |----------|------|------------|
 | Rust | `RenderError { expression: string, message: string }` | crate |
 | Rust | `impl Clone`, `Debug`, `Display`, and `std::error::Error for RenderError` | crate |
-| Rust | `Werk.render_prompt(source: string, values: [string, string][]): string throws RenderError` | crate |
+| Rust | `Werk.render_prompt(prompt: string, values: [string, string][]): string throws RenderError` | crate |
 | Rust | `Values = Record<string, string>` | private |
-| Rust | `render_source(template: string, named_value: (name: string) => string?, werk: Werk): string throws RenderError` | private |
+| Rust | `render_template(template: string, resolve: (expression: string) => string? throws RenderError): string throws RenderError` | private |
+| Rust | `render_values(template: string, named_value: (name: string) => string?): string` | private |
 | Rust | `resolve_expression(werk: Werk, expression: string, named_value: (name: string) => string?): string? throws RenderError` | private |
+| Rust | `expand_nested(expression: string, named_value: (name: string) => string?): [string, boolean] throws string` | private |
+| Rust | `readable_expression(expression: string): string? throws string` | private |
 | Rust | `result_expression(expression: string): [string, string]?` | private |
-| Rust | `expression_end(body: string): number?` | private |
-| Rust | `resolve_result(werk: Werk, kind: string, query: string): string throws string` | private |
+| Rust | `expression_end(body: string): number? throws string` | private |
+| Rust | `is_plural(kind: string): boolean` | private |
+| Rust | `select_result(werk: Werk, kind: string, query: string): json throws string` | private |
+| Rust | `result_text(value: json, plural: boolean): string` | private |
+| Rust | `readable(value: json): string` | private |
+| Rust | `readable_lines(value: json, indent: number): string[]` | private |
 | Rust | `result_value(werk: Werk, task: Task, use_path: boolean): json throws string` | private |
 
 ## `crates/agentwerk/src/providers/anthropic.rs`

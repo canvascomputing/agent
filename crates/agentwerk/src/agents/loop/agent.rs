@@ -140,7 +140,7 @@ impl Agent {
             }
         };
         let initial_task_reply = if task.replies.is_empty() {
-            Some(task.initial_reply(werk)?)
+            Some(task.initial_reply(werk, &context_values)?)
         } else {
             None
         };
@@ -368,7 +368,10 @@ mod tests {
                 .provider(provider.clone())
                 .model("mock")
                 .role("test")
-                .directive(REPLY_REJECTED, "attempt {attempt} of {max_attempts}"),
+                .directive(
+                    REPLY_REJECTED,
+                    "attempt {{ attempt }} of {{ max_attempts }}",
+                ),
         );
 
         werk.start();
@@ -410,7 +413,7 @@ mod tests {
                 .provider(scout.clone())
                 .model("mock")
                 .role("test")
-                .directive(REPLY_REJECTED, "{agent}, CALL A TOOL"),
+                .directive(REPLY_REJECTED, "{{ agent }}, CALL A TOOL"),
         );
         werk.add_agent(
             Agent::new()
@@ -418,7 +421,7 @@ mod tests {
                 .provider(worker.clone())
                 .model("mock")
                 .role("test")
-                .directive(REPLY_REJECTED, "{agent}, CALL A TOOL"),
+                .directive(REPLY_REJECTED, "{{ agent }}, CALL A TOOL"),
         );
 
         werk.start();

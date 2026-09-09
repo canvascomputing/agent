@@ -256,10 +256,11 @@ impl Task {
     pub(crate) fn initial_reply(
         &self,
         werk: &crate::Werk,
+        context_values: &[(&str, String)],
     ) -> Result<Reply, crate::prompts::RenderError> {
         let mut initial = self.clone();
         if let serde_json::Value::String(text) = &self.task {
-            let text = werk.render_prompt(text, &[])?;
+            let text = werk.render_prompt(text, context_values)?;
             initial.task = serde_json::Value::String(text);
         }
         let Message::User { content } = initial.as_user_message() else {

@@ -96,7 +96,7 @@ async fn finds_code_pattern_with_special_chars(
             .model(&model)
             .dir(root)
             .role(
-                "{context}\n\n\
+                "{{ context }}\n\n\
                  Investigate the working directory and answer the user's question. \
                  Use the available tools: pick whichever one fits the question. \
                  When you have the answer, settle the task via \

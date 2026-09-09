@@ -112,7 +112,7 @@ Put each fact at its narrowest stable layer:
 ## Context and Data
 
 - Include a runtime value ONLY when it changes an action.
-- Prefer a specific value such as `{date}` or `{task_id}` over `{context}`.
+- Prefer a specific value such as `{{ date }}` or `{{ task_id }}` over `{{ context }}`.
 - Wrap injected requests, findings, research, and upstream results in descriptive XML tags.
 - Mark an injected block as data when it could contain instructions.
 - Carry exact upstream fields instead of paraphrasing them.

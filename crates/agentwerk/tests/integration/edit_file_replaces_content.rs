@@ -29,7 +29,7 @@ async fn replaces_substring_in_place() -> std::result::Result<(), Box<dyn std::e
         .model(&model)
         .dir(root)
         .role(
-            "{context}\n\n\
+            "{{ context }}\n\n\
              Step 1: call `edit_file` to perform an exact substring \
              replacement in the existing file. Do not rewrite the whole file. \
              Step 2: immediately call `finish` to settle the \

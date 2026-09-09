@@ -409,7 +409,7 @@ mod tests {
             .unwrap_err();
         assert!(
             violations.iter().any(|v| v.message.contains("`slug`")),
-            "{violations}"
+            "{{ violations }}"
         );
     }
 

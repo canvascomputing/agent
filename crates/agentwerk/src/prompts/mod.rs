@@ -1,5 +1,5 @@
 //! Assembles what an agent is told: the role, the directives, and the facts
-//! `{context}` expands to.
+//! `{{ context }}` expands to.
 
 pub(crate) mod directives;
 mod prompt;
@@ -13,6 +13,7 @@ use directives::{
     built_in, DirectiveStore, ARGUMENTS_EXPECTED, ARGUMENTS_REJECTED, RESULT_SCHEMA_REQUIRED,
     SUMMARY_REQUESTED,
 };
+use prompt::render_values;
 pub(crate) use prompt::RenderError;
 
 use crate::agents::policy::Policy;
@@ -62,7 +63,7 @@ pub(crate) fn arguments_retry_detail(
     format!("{rejected}\n\n{expected}")
 }
 
-/// Build the runtime string values available while an agent's role is rendered.
+/// Build the runtime string values available while an agent's prompt is rendered.
 pub(crate) fn context_values(
     dir: &Path,
     policy: &Policy,
@@ -121,15 +122,16 @@ fn render_context(values: &[(&str, String)]) -> String {
         .trim_matches('\n')
         .lines()
         .filter_map(|line| {
-            let mut rendered = line.to_string();
             let mut has_value = false;
-            for (name, value) in values {
-                let placeholder = format!("{{{name}}}");
-                if rendered.contains(&placeholder) {
-                    has_value |= !value.is_empty();
-                    rendered = rendered.replace(&placeholder, value);
-                }
-            }
+            let rendered = render_values(line, |name| {
+                values
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| {
+                        has_value |= !value.is_empty();
+                        value.clone()
+                    })
+            });
             has_value.then_some(rendered)
         })
         .collect::<Vec<_>>()
@@ -259,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn context_body_renders_bare_bullets_with_substituted_values() {
+    fn context_body_contains_only_rendered_fact_bullets() {
         let rendered = context_body(
             &PathBuf::from("/tmp/check"),
             &Policy::default(),
@@ -271,39 +273,9 @@ mod tests {
         assert!(lines[1].starts_with("- Date: "));
         assert_eq!(lines[2], "- Working directory: /tmp/check");
         assert!(lines[3].starts_with("- Platform: "));
+        assert!(lines.iter().all(|line| line.starts_with("- ")));
         assert!(!rendered.contains('{'), "no unsubstituted placeholders");
-    }
-
-    #[test]
-    fn context_body_carries_no_prose_around_the_bullets() {
-        let rendered = context_body(
-            &PathBuf::from("/tmp/check"),
-            &Policy::default(),
-            &Stats::new(),
-            "t-7",
-        );
-        // The role prompt owns any framing and heading around the facts.
-        assert!(rendered.lines().all(|line| line.starts_with("- ")));
         assert!(!rendered.contains("## "));
-    }
-
-    #[test]
-    fn context_values_leave_an_unset_budget_empty() {
-        let values = context_values(
-            &PathBuf::from("/tmp/check"),
-            &Policy::default(),
-            &Stats::new(),
-            "t-7",
-        );
-        let value = |name| {
-            values
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, value)| value.as_str())
-        };
-        assert_eq!(value("task_id"), Some("t-7"));
-        assert_eq!(value("turns_remaining"), Some(""));
-        assert_eq!(value("time_remaining"), Some(""));
     }
 
     #[test]

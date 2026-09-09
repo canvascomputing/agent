@@ -41,7 +41,7 @@ async fn command_tools_produce_the_schema_bound_result(
         .provider(provider)
         .model(&model)
         .role(
-            "{context}\n\n\
+            "{{ context }}\n\n\
              Step 1: call `ls`, `cat Cargo.toml`, and `wc -l Cargo.toml` to \
              gather the file list and Cargo.toml line count. \
              Step 2: immediately call `finish` with `result` \

@@ -2,7 +2,7 @@
 
 ## Context
 
-{context}
+{{ context }}
 
 ## Role
 

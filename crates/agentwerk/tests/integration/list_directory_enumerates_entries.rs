@@ -50,7 +50,7 @@ async fn separates_files_and_directories() -> std::result::Result<(), Box<dyn st
         .model(&model)
         .dir(root)
         .role(
-            "{context}\n\n\
+            "{{ context }}\n\n\
              Step 1: call `list_directory` with `path: \".\"` to see the \
              working directory's top level. \
              Step 2: immediately call `finish` with `result` set to a JSON \

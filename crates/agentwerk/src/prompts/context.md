@@ -1,8 +1,8 @@
-- Task: {task_id}
-- Date: {date}
-- Working directory: {dir}
-- Platform: {platform} {os_version}
-- Turns remaining: {turns_remaining}
-- Input tokens remaining: {input_tokens_remaining}
-- Output tokens remaining: {output_tokens_remaining}
-- Time remaining: {time_remaining}
+- Task: {{ task_id }}
+- Date: {{ date }}
+- Working directory: {{ dir }}
+- Platform: {{ platform }} {{ os_version }}
+- Turns remaining: {{ turns_remaining }}
+- Input tokens remaining: {{ input_tokens_remaining }}
+- Output tokens remaining: {{ output_tokens_remaining }}
+- Time remaining: {{ time_remaining }}

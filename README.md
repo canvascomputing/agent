@@ -129,7 +129,7 @@ The [prompt skill](skills/prompt/SKILL.md) provides a compact template for writi
 | | `finish()` | Run tasks and return their results. |
 | | `get_id()` | Get the unique identifier of an agent. |
 
-Use `{context}` in a role to include the current task and execution limits:
+Use `{{ context }}` in a prompt to include the current task and execution limits:
 
 ```markdown
 - Task: t-7
@@ -142,7 +142,7 @@ Use `{context}` in a role to include the current task and execution limits:
 - Time remaining: 240s
 ```
 
-Every value is a variable of its own: `{task_id}`, `{date}`, `{dir}`, `{platform}`, `{os_version}`, `{turns_remaining}`, `{input_tokens_remaining}`, `{output_tokens_remaining}`, and `{time_remaining}`.
+Each context field is also available separately: `{{ task_id }}`, `{{ date }}`, `{{ dir }}`, `{{ platform }}`, `{{ os_version }}`, `{{ turns_remaining }}`, `{{ input_tokens_remaining }}`, `{{ output_tokens_remaining }}`, and `{{ time_remaining }}`.
 
 #### Interactive
 
@@ -470,7 +470,7 @@ use agentwerk::{Agent, Task};
 werk.add_agent(
     Agent::from_env()
         .label("report")
-        .role("Write for {company} using:\n{results: research}"),
+        .role("Write for {{ company }} using:\n{{ results: research }}"),
 );
 werk.set_template("company", "Canvas Computing");
 werk.finish_tasks("research").await;
@@ -484,15 +484,40 @@ agentwerk fills placeholders in the role and task just before each task's first 
 
 | Expression | Output |
 |---|---|
-| `{name}` | The value assigned to `name`. |
-| `{result: AQL}` | The first result; strings as text, other values as compact JSON. |
-| `{results: AQL}` | A compact JSON array of matching results. |
-| `{result_path: AQL}` | The absolute path of the first matching result file. |
-| `{result_paths: AQL}` | A JSON array of absolute result file paths. |
+| `{{ name }}` | The value assigned to `name`. |
+| `{{ result: AQL }}` | The first result; strings as text, other values as compact JSON. |
+| `{{ results: AQL }}` | A compact JSON array of matching results. |
+| `{{ result_path: AQL }}` | The absolute path of the first matching result file. |
+| `{{ result_paths: AQL }}` | A JSON array of absolute result file paths. |
+| `{{ readable(result: AQL) }}` | The first result as a readable outline. |
+| `{{ readable(results: AQL) }}` | Matching results as a readable outline. |
 
-Use `{{` and `}}` to include literal braces.
+`{ name }` stays unchanged. To output the literal text `{{ name }}`, write `{{{{ name }}}}`.
 
 </details>
+
+#### Readable results
+
+Use `readable` when an agent should receive structured results as an outline instead of JSON:
+
+```rust
+werk.add_agent(
+    Agent::from_env()
+        .label("report")
+        .role("Summarize:\n{{ readable(results: task.label = research) }}"),
+);
+```
+
+Results such as `{"title":"Market","updates":["one","two"]}` render as:
+
+```text
+- title: Market
+  updates:
+    - one
+    - two
+```
+
+Nulls and empty collections do not appear.
 
 #### 3. Knowledge
 
@@ -638,16 +663,14 @@ let agent = Agent::from_env()
     .directive("grep_failed", "The search did not run. Narrow `path`.")
     .directives([
         ("tool_timed_out", "Reduce the command scope."),
-        ("cache_miss", "No cache entry exists for {path}."),
+        ("cache_miss", "No cache entry exists for {{ path }}."),
     ]);
 ```
 
 <details>
 <summary>Directive reference</summary>
 
-Built-in keys override recovery text; keys without overrides retain their defaults. Templates accept runtime values such as `{detail}`, `{attempt}`, and `{path}`. Placeholders without a value remain unchanged.
-
-For non-terminal `EventTool` events, use the event name as the key to replace the acknowledgement sent to the model. The template can use `{data}` for the JSON payload or a top-level field such as `{path}`. The event and tool result record the directive key.
+Built-in keys override recovery text; keys without overrides retain their defaults. Templates accept runtime values such as `{{ detail }}`, `{{ attempt }}`, and `{{ path }}`. Placeholders without a value remain unchanged.
 
 See [prompts/directives](https://github.com/canvascomputing/agentwerk/tree/main/crates/agentwerk/src/prompts/directives) for the built-in text.
 

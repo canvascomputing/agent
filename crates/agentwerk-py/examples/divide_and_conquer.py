@@ -26,7 +26,7 @@ from agentwerk import (
 )
 
 ROLE = """
-{context}
+{{ context }}
 
 You compute one partial sum exactly with the `python` tool.
 
