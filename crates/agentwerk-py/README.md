@@ -1076,16 +1076,16 @@ See [`Knowledge`](https://docs.rs/agentwerk/latest/agentwerk/agents/knowledge/st
 Example projects built with agentwerk:
 
 - [Hello World](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/hello_world/): basic example, also available as a [Python example](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/hello_world.py)
-- [Terminal REPL](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/terminal_repl/): interactive terminal chat
-- [Divide and Conquer](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/divide_and_conquer/): split an arithmetic problem across agents, also available as a [Python example](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/divide_and_conquer.py)
+- [Terminal REPL](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/terminal_repl/): minimal multi-turn terminal chat
+- [Editorial Review](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/editorial_review/): route a draft through an editor with a result hook and AQL, also available as a [Python example](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/editorial_review.py)
 - [Deep Research](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/deep_research/): research across several sources (requires `BRAVE_API_KEY`)
-- [Malware Scanner](https://github.com/canvascomputing/agentwerk/tree/main/crates/use-cases/src/malware_scanner/): find signs of malware in a software package
+- [Malware Scanner](https://github.com/canvascomputing/malwi): find signs of malware in a software package
 - [Apparat Fabrik](https://github.com/canvascomputing/agentwerk/blob/main/crates/agentwerk-py/examples/apparat_fabrik.py): simulate agents inspecting and assembling factory parts
 
 > Configure an LLM provider first (see [Environment](https://github.com/canvascomputing/agentwerk/blob/main/DEVELOPMENT.md#environment)).
 
 ```bash
-python examples/divide_and_conquer.py 200 4 2
+python examples/editorial_review.py "Draft a short release announcement."
 ```
 
 ## Security

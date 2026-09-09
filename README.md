@@ -1062,10 +1062,10 @@ See [`Knowledge`](https://docs.rs/agentwerk/latest/agentwerk/agents/knowledge/st
 Example projects built with agentwerk:
 
 - [Hello World](crates/use-cases/src/hello_world/): basic example
-- [Terminal REPL](crates/use-cases/src/terminal_repl/): interactive terminal chat
-- [Divide and Conquer](crates/use-cases/src/divide_and_conquer/): split an arithmetic problem across agents
+- [Terminal REPL](crates/use-cases/src/terminal_repl/): minimal multi-turn terminal chat
+- [Editorial Review](crates/use-cases/src/editorial_review/): route a draft through an editor with a result hook and AQL
 - [Deep Research](crates/use-cases/src/deep_research/): research across several sources (requires `BRAVE_API_KEY`)
-- [Malware Scanner](crates/use-cases/src/malware_scanner/): find signs of malware in a software package
+- [Malware Scanner](https://github.com/canvascomputing/malwi): find signs of malware in a software package
 
 > Configure an LLM provider first (see [Environment](DEVELOPMENT.md#environment)).
 
