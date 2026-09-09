@@ -33,7 +33,7 @@
     },
     {
       "name": "task_finished",
-      "data": { "result": "..." }
+      "data": {}
     }
   ]
 }

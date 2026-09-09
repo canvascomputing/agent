@@ -9,7 +9,7 @@ use crate::agents::tasks::{policy_violated, Author, Reply, Status, Task, Werk};
 use crate::event::Event;
 use crate::prompts::directives::{NO_TOOL_CALLED, REPLY_REJECTED};
 use crate::prompts::RenderError;
-use crate::providers::ProviderError;
+use crate::providers::{ContentBlock, ModelResponse, ProviderError, ResponseStatus};
 
 use super::{CompactReason, POLL_INTERVAL};
 
@@ -88,11 +88,11 @@ impl Agent {
                 break;
             }
 
-            let calls = match self
+            let response = match self
                 .request(werk, &task_id, system_prompt, &policy, &tools)
                 .await
             {
-                Ok(Some(calls)) => calls,
+                Ok(Some(response)) => response,
                 Ok(None) => break,
                 Err(ProviderError::ContextWindowExceeded { .. }) => {
                     if self.compact(werk, &task_id, CompactReason::Reactive).await {
@@ -102,9 +102,27 @@ impl Agent {
                 }
                 Err(_) => break,
             };
-            if calls.is_empty() {
-                continue;
+            let has_tool_call = response
+                .content
+                .iter()
+                .any(|block| matches!(block, ContentBlock::ToolUse { .. }));
+            if !has_tool_call {
+                if self.is_interactive() || task.schema.is_some() {
+                    continue;
+                }
+                let Some(result) = plain_text_result(&response) else {
+                    continue;
+                };
+                werk.set_result(&task_id, serde_json::Value::String(result))
+                    .expect("schema-less tasks accept every JSON value");
+                let _ = werk.set_finished_by(&task_id, self.get_id());
+                break;
             }
+            let calls = response
+                .content
+                .into_iter()
+                .filter(|block| matches!(block, ContentBlock::ToolUse { .. }))
+                .collect();
             if !self
                 .call_tools(
                     werk,
@@ -255,12 +273,29 @@ impl Agent {
     }
 }
 
+fn plain_text_result(response: &ModelResponse) -> Option<String> {
+    if response.status != ResponseStatus::EndTurn {
+        return None;
+    }
+    let mut result = String::new();
+    let mut has_text = false;
+    for block in &response.content {
+        if let ContentBlock::Text { text } = block {
+            has_text = true;
+            result.push_str(text);
+        }
+    }
+    has_text.then_some(result)
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
 
+    use super::plain_text_result;
     use crate::agents::policy::Policy;
+    use crate::event::Event;
     use crate::prompts::directives::{DirectiveStore, REPLY_REJECTED};
 
     use crate::agents::agent::Agent;
@@ -303,7 +338,131 @@ mod tests {
             .expect("finish did not finish within 5s");
 
         assert_eq!(werk.get_results().len(), 2);
-        assert_eq!(werk.get_results().pop(), Some(serde_json::json!("b-done")));
+        assert_eq!(
+            werk.get_results().pop(),
+            Some(serde_json::json!({"answer": "b-done"}))
+        );
+    }
+
+    #[tokio::test]
+    async fn schema_less_plain_text_is_the_exact_result_everywhere() {
+        let results_dir = crate::test_util::TempDir::new().unwrap();
+        let provider = MockProvider::with_results(vec![Ok(text_response("  true\n"))]);
+        let werk = Werk::new();
+        werk.set_dir(results_dir.path().to_path_buf());
+        let events = collect_events(&werk);
+        let hook_results = Arc::new(Mutex::new(Vec::new()));
+        let seen = Arc::clone(&hook_results);
+        werk.on_result(move |_, _, result| seen.lock().unwrap().push(result.clone()));
+        werk.add_agent(task_agent(&provider));
+        let id = werk.add_task("answer exactly");
+
+        let results = werk.finish().await;
+
+        let expected = serde_json::json!("  true\n");
+        assert_eq!(provider.requests(), 1);
+        assert_eq!(results, vec![expected.clone()]);
+        assert_eq!(werk.get_task(&id).unwrap().result, Some(expected.clone()));
+        assert_eq!(*hook_results.lock().unwrap(), vec![expected.clone()]);
+        let finished = events
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|event| event.get_name() == Event::TASK_FINISHED)
+            .cloned()
+            .expect("task_finished event");
+        assert_eq!(finished.get_data(), &expected);
+        assert!(!events
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|event| event.get_name() == Event::SCHEMA_RETRIED));
+        let stored: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(werk.result_path(&id)).unwrap()).unwrap();
+        assert_eq!(stored, expected);
+
+        drop(werk);
+        let loaded = Werk::load(results_dir.path()).unwrap();
+        assert_eq!(loaded.get_task(&id).unwrap().result, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn plain_text_result_joins_only_text_from_a_normal_end_turn() {
+        let response = crate::providers::ModelResponse {
+            content: vec![
+                crate::providers::ContentBlock::Text {
+                    text: "  first".into(),
+                },
+                crate::providers::ContentBlock::Thinking {
+                    thinking: "hidden".into(),
+                    signature: "opaque".into(),
+                },
+                crate::providers::ContentBlock::Text {
+                    text: "second\n".into(),
+                },
+            ],
+            status: crate::providers::ResponseStatus::EndTurn,
+            usage: crate::providers::TokenUsage::default(),
+            model: "mock".into(),
+        };
+
+        assert_eq!(
+            plain_text_result(&response).as_deref(),
+            Some("  firstsecond\n")
+        );
+        let (_, _, task) = run_one(
+            MockProvider::with_results(vec![Ok(response.clone())]),
+            0,
+            3,
+            None,
+        )
+        .await;
+        assert_eq!(task.result, Some(serde_json::json!("  firstsecond\n")));
+
+        for status in [
+            crate::providers::ResponseStatus::StopSequence,
+            crate::providers::ResponseStatus::ToolUse,
+            crate::providers::ResponseStatus::OutputTruncated,
+            crate::providers::ResponseStatus::Refused,
+            crate::providers::ResponseStatus::PauseTurn,
+        ] {
+            let mut non_final = response.clone();
+            non_final.status = status;
+            assert_eq!(plain_text_result(&non_final), None);
+        }
+
+        let mut text_free = response;
+        text_free
+            .content
+            .retain(|block| !matches!(block, crate::providers::ContentBlock::Text { .. }));
+        assert_eq!(plain_text_result(&text_free), None);
+    }
+
+    #[tokio::test]
+    async fn a_tool_call_takes_precedence_over_accompanying_text() {
+        let provider = MockProvider::with_results(vec![Ok(crate::providers::ModelResponse {
+            content: vec![
+                crate::providers::ContentBlock::Text {
+                    text: "ignore this preface".into(),
+                },
+                crate::providers::ContentBlock::ToolUse {
+                    id: "call-1".into(),
+                    name: "finish".into(),
+                    input: serde_json::json!({"answer": "tool result"}),
+                },
+            ],
+            status: crate::providers::ResponseStatus::ToolUse,
+            usage: crate::providers::TokenUsage::default(),
+            model: "mock".into(),
+        })]);
+
+        let (_, provider, task) = run_one(provider, 0, 3, None).await;
+
+        assert_eq!(provider.requests(), 1);
+        assert_eq!(
+            task.result,
+            Some(serde_json::json!({"answer": "tool result"}))
+        );
     }
 
     // retry directive
@@ -332,7 +491,7 @@ mod tests {
         );
 
         werk.start();
-        werk.add_task("go");
+        werk.add_task(Task::new("go").schema(string_schema()));
         tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
@@ -375,7 +534,7 @@ mod tests {
         );
 
         werk.start();
-        werk.add_task("go");
+        werk.add_task(Task::new("go").schema(string_schema()));
         tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
@@ -425,8 +584,8 @@ mod tests {
         );
 
         werk.start();
-        werk.add_task(Task::new("go").label("scout"));
-        werk.add_task(Task::new("go").label("worker"));
+        werk.add_task(Task::new("go").label("scout").schema(string_schema()));
+        werk.add_task(Task::new("go").label("worker").schema(string_schema()));
         tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
@@ -466,7 +625,7 @@ mod tests {
         );
 
         werk.start();
-        werk.add_task("go");
+        werk.add_task(Task::new("go").schema(string_schema()));
         tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("finish did not finish within 5s");
@@ -552,7 +711,10 @@ mod tests {
             if scans.len() < 2 || filed.swap(true, Ordering::SeqCst) {
                 return;
             }
-            let verdicts: Vec<String> = scans.iter().map(|scan| scan.to_string()).collect();
+            let verdicts: Vec<&str> = scans
+                .iter()
+                .filter_map(|scan| scan["answer"].as_str())
+                .collect();
             werk.add_task(Task::labeled(
                 "report",
                 format!("Write the report from {}.", verdicts.join(" and ")),
@@ -580,12 +742,12 @@ mod tests {
         let report = werk.find_task("task.label = report").unwrap();
         assert_eq!(
             report.task,
-            serde_json::json!("Write the report from \"clean\" and \"clean\".")
+            serde_json::json!("Write the report from clean and clean.")
         );
         assert_eq!(report.status, Status::Finished);
         assert_eq!(
             werk.find_results("task.label = report"),
-            vec![serde_json::json!("report-done")]
+            vec![serde_json::json!({"answer": "report-done"})]
         );
     }
 
@@ -636,7 +798,7 @@ mod tests {
                 name: "event".into(),
                 input: serde_json::json!({
                     "name": crate::event::Event::TASK_FINISHED,
-                    "data": { "result": { "verdict": "safe" } }
+                    "data": { "verdict": "safe" }
                 }),
             }],
             status: crate::providers::ResponseStatus::ToolUse,
@@ -961,7 +1123,7 @@ mod tests {
             });
         let collected = collect_events(&werk);
         werk.add_agent(task_agent(&provider));
-        werk.add_task("go");
+        werk.add_task(Task::new("go").schema(string_schema()));
 
         tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
@@ -1003,7 +1165,7 @@ mod tests {
                 ..Default::default()
             });
         werk.add_agent(task_agent(&provider));
-        werk.add_task("go");
+        werk.add_task(Task::new("go").schema(string_schema()));
 
         tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
@@ -1015,7 +1177,10 @@ mod tests {
             .next()
             .expect("task must exist");
         assert_eq!(task.status, Status::Finished);
-        assert_eq!(werk.get_results().pop(), Some(serde_json::json!("done")));
+        assert_eq!(
+            werk.get_results().pop(),
+            Some(serde_json::json!({"answer": "done"}))
+        );
     }
 
     #[tokio::test]
@@ -1035,7 +1200,7 @@ mod tests {
             });
         let collected = collect_events(&werk);
         werk.add_agent(task_agent(&provider));
-        werk.add_task("go");
+        werk.add_task(Task::new("go").schema(string_schema()));
 
         tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
@@ -1173,13 +1338,19 @@ mod tests {
 
         werk.add_task("first");
         werk.finish().await;
-        assert_eq!(werk.get_results().pop(), Some(serde_json::json!("first")));
+        assert_eq!(
+            werk.get_results().pop(),
+            Some(serde_json::json!({"answer": "first"}))
+        );
 
         werk.add_task("second");
         tokio::time::timeout(Duration::from_secs(5), werk.finish())
             .await
             .expect("second finish did not finish within 5s");
-        assert_eq!(werk.get_results().pop(), Some(serde_json::json!("second")));
+        assert_eq!(
+            werk.get_results().pop(),
+            Some(serde_json::json!({"answer": "second"}))
+        );
     }
 
     #[tokio::test]
@@ -1208,7 +1379,7 @@ mod tests {
             .expect("the run did not end within 5s");
         assert_eq!(
             werk.get_results().pop(),
-            Some(serde_json::json!("forwarded"))
+            Some(serde_json::json!({"answer": "forwarded"}))
         );
     }
 
@@ -1514,9 +1685,7 @@ mod tests {
         let declared = event.get_input_schema().get_raw_schema();
 
         assert!(
-            declared["allOf"][0]["then"]["properties"]["data"]["properties"]["result"]
-                ["properties"]["verdict"]
-                .is_object()
+            declared["allOf"][0]["then"]["properties"]["data"]["properties"]["verdict"].is_object()
         );
     }
 

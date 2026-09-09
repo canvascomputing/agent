@@ -20,7 +20,7 @@ The arguments `{{ tool }}` accepts:
 {{ schema }}
 
 ## result_schema_required
-Record your `result` via `finish` as a JSON value matching this schema:
+Call `finish` with a JSON object matching this schema:
 {{ schema }}
 
 ## summary_requested

@@ -37,7 +37,7 @@ impl From<EventTool> for Tool {
 impl EventTool {
     pub(crate) const NAME: &str = "event";
 
-    /// Bind the current task's result schema inside `data.result` while
+    /// Bind the current task's result schema directly to `data` while
     /// leaving every non-terminal event's data unconstrained.
     pub(crate) fn from_schema(schema: Option<Schema>) -> Tool {
         let mut document: Value =
@@ -58,17 +58,13 @@ impl EventTool {
     }
 }
 
-/// The `finish` arguments, also used as `task_finished` event data.
+/// The result object used as `finish` arguments and `task_finished` event data.
 pub(super) fn task_finished_schema(schema: Option<&Schema>) -> Value {
-    let mut document: Value =
+    let document: Value =
         serde_json::from_str(FINISH_SCHEMA).expect("finish.schema.json is valid JSON");
-    if let Some(task) = schema {
-        document["properties"]["result"] = task.get_raw_schema().clone();
-    }
-    if schema.is_some() {
-        document["required"] = serde_json::json!(["result"]);
-    }
-    document
+    schema
+        .map(|task| task.get_raw_schema().clone())
+        .unwrap_or(document)
 }
 
 /// Publish one event. `task_finished` uses the task transition so
@@ -145,7 +141,7 @@ fn finish(
 ) -> Result<Event, Box<Event>> {
     let id = resolve_current_id(werk, ctx)?;
     let agent = ctx.agent_id.clone().unwrap_or_default();
-    let result = input.get("result").cloned().unwrap_or(Value::Null);
+    let result = input.clone();
 
     let completion = CompletionContext {
         werk,
@@ -336,7 +332,7 @@ mod tests {
             .call(
                 serde_json::json!({
                     "name": Event::TASK_FINISHED,
-                    "data": { "result": { "verdict": "safe" } }
+                    "data": { "verdict": "safe" }
                 }),
                 &ctx,
             )
@@ -355,7 +351,7 @@ mod tests {
             .call(
                 serde_json::json!({
                     "name": Event::TASK_FINISHED,
-                    "data": { "result": { "verdict": "unsafe" } }
+                    "data": { "verdict": "unsafe" }
                 }),
                 &ctx,
             )
@@ -380,7 +376,7 @@ mod tests {
             .call(
                 serde_json::json!({
                     "name": Event::TASK_FINISHED,
-                    "data": {"result": "done"}
+                    "data": {"answer": "done"}
                 }),
                 &ctx,
             )
@@ -418,7 +414,7 @@ mod tests {
             .call(
                 serde_json::json!({
                     "name": Event::TASK_FINISHED,
-                    "data": { "result": { "line": "forty-two" } }
+                    "data": { "line": "forty-two" }
                 }),
                 &ctx,
             )
@@ -431,7 +427,7 @@ mod tests {
             .call(
                 serde_json::json!({
                     "name": Event::TASK_FINISHED,
-                    "data": { "result": { "line": "42" } }
+                    "data": { "line": "42" }
                 }),
                 &ctx,
             )
@@ -446,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn a_bound_schema_lives_at_task_finished_data_result_only() {
+    fn a_bound_schema_lives_at_task_finished_data() {
         let schema = Schema::new(serde_json::json!({
             "type": "object",
             "properties": { "verdict": { "type": "string" } },
@@ -458,34 +454,32 @@ mod tests {
 
         assert!(declared["properties"]["data"].get("properties").is_none());
         assert_eq!(
-            declared["allOf"][0]["then"]["properties"]["data"]["required"],
-            serde_json::json!(["result"])
-        );
-        assert!(
-            declared["allOf"][0]["then"]["properties"]["data"]["properties"]["result"]
-                ["properties"]["verdict"]
-                .is_object()
+            declared["allOf"][0]["then"]["properties"]["data"],
+            serde_json::json!({
+                "type": "object",
+                "properties": { "verdict": { "type": "string" } },
+                "required": ["verdict"]
+            })
         );
         assert!(tool
             .get_input_schema()
             .validate(serde_json::json!({
                 "name": Event::TASK_FINISHED,
-                "data": { "verdict": "safe" }
+                "data": { "result": { "verdict": "safe" } }
             }))
             .is_err());
     }
 
     #[test]
-    fn task_finished_rejects_an_obsolete_handover_sibling() {
+    fn task_finished_accepts_result_as_an_ordinary_field() {
         let schema = Tool::from(EventTool).get_input_schema().clone();
         assert!(schema
             .validate(serde_json::json!({
                 "name": Event::TASK_FINISHED,
                 "data": {
-                    "result": "done",
-                    "handover": {"label": "review", "task": "continue"}
+                    "result": "ordinary data"
                 }
             }))
-            .is_err());
+            .is_ok());
     }
 }

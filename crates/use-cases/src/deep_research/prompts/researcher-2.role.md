@@ -18,6 +18,6 @@ You deepen and broaden Researcher 1's work with causes, consequences, criticisms
 
 ## Output
 
-Call `finish({"result": "..."})` once.
+Call `finish({"research": "..."})` once.
 
-- `result` (400–1000 characters): several full sentences of plain prose extending the supplied research, with every factual claim followed by `Source: <url>`.
+- `research` (400–1000 characters): several full sentences of plain prose extending the supplied research, with every factual claim followed by `Source: <url>`.

@@ -359,7 +359,7 @@ mod tests {
     #[tokio::test]
     async fn result_defaults_id_to_current_task() {
         let (werk, id) = shared_with_one_task("alice");
-        werk.set_result(&id, serde_json::json!("what alice found"))
+        werk.set_result(&id, serde_json::json!({"answer": "what alice found"}))
             .unwrap();
 
         let ctx = ctx_with(Arc::clone(&werk), "alice");

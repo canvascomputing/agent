@@ -1163,7 +1163,7 @@ mod tests {
                 tokio::time::timeout(std::time::Duration::from_secs(5), agent.finish_task(task))
                     .await
                     .unwrap();
-            assert_eq!(result, Some(serde_json::json!(answer)));
+            assert_eq!(result, Some(serde_json::json!({"answer": answer})));
         }
         assert_eq!(werk.clone_agents().len(), 1);
         assert_eq!(werk.find_events("event.name = run_started").len(), 2);
@@ -1191,11 +1191,14 @@ mod tests {
             .await;
         assert_eq!(
             results,
-            vec![serde_json::json!("third"), serde_json::json!("second")]
+            vec![
+                serde_json::json!({"answer": "third"}),
+                serde_json::json!({"answer": "second"}),
+            ]
         );
         assert_eq!(
             agent.finish_task("ORDER BY task.id DESC").await,
-            Some(serde_json::json!("third"))
+            Some(serde_json::json!({"answer": "third"}))
         );
     }
 
@@ -1224,15 +1227,18 @@ mod tests {
 
         assert_eq!(
             agent.finish().await,
-            vec![serde_json::json!("clean"), serde_json::json!("report")]
+            vec![
+                serde_json::json!({"answer": "clean"}),
+                serde_json::json!({"answer": "report"}),
+            ]
         );
         assert_eq!(
             agent.finish_task(report).await,
-            Some(serde_json::json!("report"))
+            Some(serde_json::json!({"answer": "report"}))
         );
         assert_eq!(
             agent.finish_tasks("report").await,
-            vec![serde_json::json!("report")]
+            vec![serde_json::json!({"answer": "report"})]
         );
         assert_eq!(werk.clone_agents().len(), 2);
     }
@@ -1304,7 +1310,10 @@ mod tests {
 
         assert_eq!(
             agent.finish().await,
-            vec![serde_json::json!("first"), serde_json::json!("second")]
+            vec![
+                serde_json::json!({"answer": "first"}),
+                serde_json::json!({"answer": "second"}),
+            ]
         );
         assert_eq!(werk.find_events("event.name = run_started").len(), 1);
         assert_eq!(werk.find_events("event.name = run_finished").len(), 1);

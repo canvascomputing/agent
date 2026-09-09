@@ -238,11 +238,11 @@ impl Task {
             .is_none_or(|r| r.author != Author::Assistant)
     }
 
-    /// True while the task waits on the caller: the model has spoken and
-    /// called no tool. Stricter than the negation of
-    /// [`Self::is_waiting_for_response`], which also holds in the window
-    /// between a tool-calling reply and its results, where the agent is still
-    /// working.
+    /// True after the model has spoken without calling a tool. An interactive
+    /// agent then waits on the caller; a batch agent either accepts a normal
+    /// plain-text result or recovers from a non-final reply. Stricter than the
+    /// negation of [`Self::is_waiting_for_response`], which also holds between
+    /// a tool-calling reply and its results.
     pub(crate) fn is_paused(&self) -> bool {
         self.replies.last().is_some_and(|r| {
             r.author == Author::Assistant

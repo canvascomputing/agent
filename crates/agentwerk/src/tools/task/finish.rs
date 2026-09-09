@@ -1,4 +1,4 @@
-//! The `finish` compatibility tool, backed by `EventTool`'s `task_finished` event.
+//! The `finish` tool, backed by `EventTool`'s `task_finished` event.
 
 use serde_json::Value;
 
@@ -23,8 +23,7 @@ const DEFINITION: &str = include_str!("finish.tool.md");
 pub struct FinishTool;
 
 impl From<FinishTool> for Tool {
-    /// Unbound: the registered arguments, reading the result out of `result`.
-    /// The loop rebinds it to the task's schema at claim.
+    /// The loop rebinds the registered arguments to the task's schema at claim.
     fn from(_: FinishTool) -> Tool {
         FinishTool::from_schema(None)
     }
@@ -34,17 +33,12 @@ impl FinishTool {
     /// The name the model calls, and the name the loop looks the tool up under.
     pub(crate) const NAME: &str = "finish";
 
-    /// Bind object results directly and preserve the legacy envelope for the
-    /// other shapes, using `EventTool`'s completion branch for both.
+    /// Bind the task's result schema directly as the tool arguments.
     pub(crate) fn from_schema(schema: Option<Schema>) -> Tool {
-        let envelope = event::task_finished_schema(schema.as_ref());
-        let bound_object = schema.as_ref().is_some_and(declares_object);
-        let arguments = arguments_schema(schema.as_ref(), envelope.clone());
+        let arguments = event::task_finished_schema(schema.as_ref());
         let run = move |input: Value, ctx: ToolContext| {
             let schema = schema.clone();
-            let envelope = envelope.clone();
             async move {
-                let input = normalize_input(input, &envelope, bound_object);
                 let event = serde_json::json!({
                     "name": Event::TASK_FINISHED,
                     "data": input,
@@ -57,67 +51,6 @@ impl FinishTool {
             .description(DEFINITION)
             .schema(arguments)
             .handler_with_context(run)
-    }
-}
-
-/// A bound object is the call itself. Scalars and unbound calls retain the
-/// legacy envelope; the conditional keeps repair inside its selected branch.
-fn arguments_schema(schema: Option<&Schema>, envelope: Value) -> Value {
-    if let Some(schema) = schema.filter(|schema| declares_object(schema)) {
-        return schema.get_raw_schema().clone();
-    }
-    let bare = schema
-        .map(|schema| schema.get_raw_schema().clone())
-        .unwrap_or_else(|| serde_json::json!({ "type": "object" }));
-    let mut envelope_cases = vec![serde_json::json!({ "const": {} })];
-    envelope_cases.extend(
-        envelope["properties"]
-            .as_object()
-            .expect("finish schema properties are an object")
-            .keys()
-            .map(|name| serde_json::json!({ "required": [name] })),
-    );
-    serde_json::json!({
-        "type": "object",
-        "if": {
-            "anyOf": envelope_cases
-        },
-        "then": envelope,
-        "else": {
-            "allOf": [
-                { "type": "object" },
-                bare
-            ]
-        },
-        "examples": [
-            { "result": "..." }
-        ]
-    })
-}
-
-fn declares_object(schema: &Schema) -> bool {
-    schema.get_raw_schema()["type"] == "object"
-}
-
-/// Put a bound object under the event engine's stable `data.result` key.
-/// Legacy calls are bare only when non-empty and free of reserved arguments;
-/// an empty call still means finishing without a result.
-fn normalize_input(input: Value, envelope: &Value, bound_object: bool) -> Value {
-    if bound_object {
-        return serde_json::json!({ "result": input });
-    }
-    let envelope_fields = envelope["properties"]
-        .as_object()
-        .expect("finish schema properties are an object");
-    let is_bare = input.as_object().is_some_and(|arguments| {
-        !arguments.is_empty()
-            && envelope_fields
-                .keys()
-                .all(|name| !arguments.contains_key(name))
-    });
-    match is_bare {
-        true => serde_json::json!({ "result": input }),
-        false => input,
     }
 }
 
@@ -228,10 +161,6 @@ mod tests {
         .unwrap()
     }
 
-    fn string_schema() -> Schema {
-        Schema::new(serde_json::json!({ "type": "string" })).unwrap()
-    }
-
     #[test]
     fn a_bound_object_schema_is_the_finish_arguments() {
         let declared = finish_for(object_schema())
@@ -241,22 +170,6 @@ mod tests {
         assert_eq!(declared, *object_schema().get_raw_schema());
         assert_eq!(declared["properties"]["status"]["type"], "string");
         assert!(declared["properties"].get("result").is_none());
-    }
-
-    #[test]
-    fn a_scalar_task_schema_is_the_result_argument_too() {
-        let declared = finish_for(string_schema())
-            .get_input_schema()
-            .get_raw_schema()
-            .clone();
-        assert_eq!(
-            declared["then"]["properties"]["result"],
-            *string_schema().get_raw_schema()
-        );
-        assert_eq!(
-            declared["else"]["allOf"][1],
-            *string_schema().get_raw_schema()
-        );
     }
 
     #[tokio::test]
@@ -334,7 +247,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_empty_call_keeps_its_legacy_null_result() {
+    async fn an_empty_call_stores_an_empty_object() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (werk, id) = one_task("alice");
         werk.set_dir(dir.path().to_path_buf());
@@ -347,13 +260,13 @@ mod tests {
         assert_eq!(outcome.get_name(), Event::TOOL_CALL_FINISHED);
         assert_eq!(
             werk.get_task(&id).unwrap().get_result(),
-            Some(&serde_json::Value::Null)
+            Some(&serde_json::json!({}))
         );
         assert_eq!(
             werk.find_event("event.name = task_finished")
                 .unwrap()
-                .get_data()["result"],
-            serde_json::Value::Null
+                .get_data(),
+            &serde_json::json!({})
         );
     }
 
@@ -372,7 +285,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn result_fields_named_like_envelope_controls_survive_the_finish() {
+    async fn fields_named_result_and_handover_remain_ordinary_data() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let werk = Werk::new();
         werk.set_dir(dir.path().to_path_buf());
@@ -409,7 +322,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_whole_object_encoded_as_text_decodes_through_the_bound_schema() {
+    async fn a_whole_object_encoded_as_text_is_rejected() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (werk, id) = one_task("alice");
         werk.set_dir(dir.path().to_path_buf());
@@ -418,24 +331,15 @@ mod tests {
             .invoke(serde_json::json!("{\"status\": \"malicious\"}"), &ctx)
             .await;
 
-        assert!(
-            outcome.get_name() == Event::TOOL_CALL_FINISHED,
-            "{outcome:?}"
-        );
-        assert_eq!(
-            werk.get_task(&id).unwrap().result.as_ref(),
-            Some(&serde_json::json!({ "status": "malicious" }))
-        );
+        assert_eq!(outcome.get_name(), Event::TOOL_CALL_FAILED, "{outcome:?}");
+        assert!(werk.get_task(&id).unwrap().result.is_none());
     }
 
     #[test]
     fn an_unbound_finish_declares_the_registered_arguments() {
         let unbound = Tool::from(FinishTool);
-        assert!(
-            unbound.get_input_schema().get_raw_schema()["then"]["properties"]["result"].is_object()
-        );
         assert_eq!(
-            unbound.get_input_schema().get_raw_schema()["else"]["allOf"][0]["type"],
+            unbound.get_input_schema().get_raw_schema()["type"],
             "object"
         );
         assert_eq!(
@@ -446,37 +350,26 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_obsolete_handover_sibling_is_rejected() {
-        let schema = Tool::from(FinishTool).get_input_schema().clone();
-        assert!(schema
-            .validate(serde_json::json!({
-                "result": "done",
-                "handover": {"label": "review", "task": "continue"}
-            }))
-            .is_err());
-    }
-
     #[tokio::test]
-    async fn writes_string_result_and_marks_finished() {
+    async fn writes_object_result_and_marks_finished() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let (werk, id) = one_task("alice");
         werk.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
-            .call(serde_json::json!({"result": "the answer"}), &ctx)
+            .call(serde_json::json!({"answer": "the answer"}), &ctx)
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
         let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::Finished);
-        assert_eq!(
-            t.result.as_ref().and_then(|v| v.as_str()),
-            Some("the answer")
-        );
+        assert_eq!(t.result.as_ref().unwrap()["answer"], "the answer");
         let event = werk.find_event("event.name = task_finished").unwrap();
-        assert_eq!(event.get_data()["result"], "the answer");
+        assert_eq!(event.get_data()["answer"], "the answer");
 
-        assert_eq!(read_result(dir.path(), &id), Some("the answer".into()));
+        assert_eq!(
+            read_result(dir.path(), &id),
+            Some(serde_json::json!({"answer": "the answer"}))
+        );
     }
 
     #[tokio::test]
@@ -486,7 +379,7 @@ mod tests {
         werk.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         Tool::from(FinishTool)
-            .call(serde_json::json!({"result": {"x": 1}}), &ctx)
+            .call(serde_json::json!({"x": 1}), &ctx)
             .await;
 
         let path = dir.path().join("tasks").join(&id).join("result.json");
@@ -508,41 +401,32 @@ mod tests {
         werk.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         Tool::from(FinishTool)
-            .call(serde_json::json!({"result": "the answer"}), &ctx)
+            .call(serde_json::json!({"answer": "the answer"}), &ctx)
             .await;
 
         let reloaded = Werk::load(dir.path()).unwrap();
         let task = reloaded.get_task(&id).unwrap();
-        assert_eq!(
-            task.result.as_ref().and_then(|v| v.as_str()),
-            Some("the answer")
-        );
+        assert_eq!(task.result.as_ref().unwrap()["answer"], "the answer");
         assert_eq!(task.status, Status::Finished);
     }
 
     #[tokio::test]
-    async fn accepts_any_value_when_no_schema() {
+    async fn unbound_tool_arguments_remain_object_shaped() {
         for value in [
             serde_json::json!(""),
             serde_json::json!(null),
             serde_json::json!(42),
             serde_json::json!(true),
-            serde_json::json!({}),
             serde_json::json!([]),
         ] {
             let dir = crate::test_util::TempDir::new().unwrap();
             let (werk, id) = one_task("alice");
             werk.set_dir(dir.path().to_path_buf());
             let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
-            let outcome = Tool::from(FinishTool)
-                .call(serde_json::json!({"result": value}), &ctx)
-                .await;
-            assert!(
-                outcome.get_name() == Event::TOOL_CALL_FINISHED,
-                "expected success for {value:?}"
-            );
+            let outcome = Tool::from(FinishTool).invoke(value.clone(), &ctx).await;
+            assert_eq!(outcome.get_name(), Event::TOOL_CALL_FAILED, "{value:?}");
             let t = werk.get_task(&id).unwrap();
-            assert_eq!(t.status, Status::Finished);
+            assert_eq!(t.status, Status::InProgress);
         }
     }
 
@@ -553,7 +437,7 @@ mod tests {
         werk.set_dir(dir.path().to_path_buf());
         let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
-            .call(serde_json::json!({"result": {"x": 1, "y": [2, 3]}}), &ctx)
+            .call(serde_json::json!({"x": 1, "y": [2, 3]}), &ctx)
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
         let t = werk.get_task(&id).unwrap();
@@ -590,14 +474,14 @@ mod tests {
         // An object where a string belongs: no retype recovers it, unlike a
         // quoted scalar.
         let outcome = Tool::from(FinishTool)
-            .call(serde_json::json!({"result": {"x": {}}}), &ctx)
+            .call(serde_json::json!({"x": {}}), &ctx)
             .await;
         assert_eq!(outcome.get_data()["kind"], "schema_failed");
         let t = werk.get_task(&id).unwrap();
         assert_eq!(t.status, Status::InProgress);
 
         let outcome = Tool::from(FinishTool)
-            .call(serde_json::json!({"result": {"x": "ok"}}), &ctx)
+            .call(serde_json::json!({"x": "ok"}), &ctx)
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
         let t = werk.get_task(&id).unwrap();
@@ -636,7 +520,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stores_a_string_encoded_result_as_the_decoded_object() {
+    async fn rejects_a_string_encoded_result() {
         let dir = crate::test_util::TempDir::new().unwrap();
         let werk = Werk::new();
         werk.set_dir(shared_test_dir().to_path_buf());
@@ -656,18 +540,14 @@ mod tests {
             .expect("claim must succeed");
         let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
 
-        // The agent double-encoded the conforming object as a JSON string.
         let outcome = Tool::from(FinishTool)
-            .call(serde_json::json!({"result": "{\"x\": \"ok\"}"}), &ctx)
+            .call(serde_json::json!("{\"x\": \"ok\"}"), &ctx)
             .await;
-        assert!(outcome.get_name() == Event::TOOL_CALL_FINISHED);
+        assert_eq!(outcome.get_name(), Event::TOOL_CALL_FAILED);
 
         let t = werk.get_task(&id).unwrap();
-        assert_eq!(t.status, Status::Finished);
-        // Stored as the decoded object, not the raw string.
-        assert!(t.result.as_ref().unwrap().is_object());
-        assert_eq!(t.result.as_ref().unwrap()["x"], "ok");
-        assert!(read_result(dir.path(), &id).unwrap().is_object());
+        assert_eq!(t.status, Status::InProgress);
+        assert_eq!(read_result(dir.path(), &id), None);
     }
 
     #[tokio::test]
@@ -677,7 +557,7 @@ mod tests {
         werk.set_dir(shared_test_dir().to_path_buf());
         let ctx = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         let outcome = Tool::from(FinishTool)
-            .call(serde_json::json!({"result": "x"}), &ctx)
+            .call(serde_json::json!({"answer": "x"}), &ctx)
             .await;
         assert!(outcome.get_name() == Event::TOOL_CALL_FAILED);
     }
@@ -695,7 +575,7 @@ mod tests {
             .expect("claim must succeed");
         let ctx_alice = ctx_with(Arc::clone(&werk), "alice", dir.path().to_path_buf());
         Tool::from(FinishTool)
-            .call(serde_json::json!({"result": "from alice"}), &ctx_alice)
+            .call(serde_json::json!({"answer": "from alice"}), &ctx_alice)
             .await;
 
         werk.insert(Task::new("b").label("bob"), "tester".into());
@@ -704,11 +584,17 @@ mod tests {
             .expect("claim must succeed");
         let ctx_bob = ctx_with(Arc::clone(&werk), "bob", dir.path().to_path_buf());
         Tool::from(FinishTool)
-            .call(serde_json::json!({"result": "from bob"}), &ctx_bob)
+            .call(serde_json::json!({"answer": "from bob"}), &ctx_bob)
             .await;
 
-        assert_eq!(read_result(dir.path(), &id1), Some("from alice".into()));
-        assert_eq!(read_result(dir.path(), &id2), Some("from bob".into()));
+        assert_eq!(
+            read_result(dir.path(), &id1),
+            Some(serde_json::json!({"answer": "from alice"}))
+        );
+        assert_eq!(
+            read_result(dir.path(), &id2),
+            Some(serde_json::json!({"answer": "from bob"}))
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -743,7 +629,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let ctx = ctx_with(werk, &agent, dir_path);
                 Tool::from(FinishTool)
-                    .call(serde_json::json!({"result": format!("payload_{i}")}), &ctx)
+                    .call(serde_json::json!({"answer": format!("payload_{i}")}), &ctx)
                     .await
             }));
         }

@@ -68,13 +68,19 @@ impl Schema {
     /// use agentwerk::schemas::Schema;
     /// use serde_json::json;
     ///
-    /// assert!(Schema::new(json!({ "type": "string", "pattern": "^[a-z]+$" })).is_ok());
+    /// assert!(Schema::new(json!({
+    ///     "type": "object",
+    ///     "properties": { "name": { "type": "string", "pattern": "^[a-z]+$" } }
+    /// })).is_ok());
     ///
     /// // A keyword outside the supported set is rejected up front.
-    /// let err = Schema::new(json!({ "uniqueItems": true })).unwrap_err();
+    /// let err = Schema::new(json!({ "type": "object", "uniqueItems": true })).unwrap_err();
     /// assert!(err.message.contains("unsupported keyword"));
     /// ```
     pub fn new(document: Value) -> Result<Self, SchemaParseError> {
+        if document["type"] != "object" {
+            return Err(parse_err("", "top-level type must be object"));
+        }
         let compiled = compile(&document, "")?;
         Ok(Self {
             inner: Arc::new(SchemaBody {
@@ -91,7 +97,7 @@ impl Schema {
     /// A value that satisfies the schema comes back unchanged and repaired
     /// nowhere. A value that does not is retyped against the schema and then
     /// checked: a scalar an agent quoted becomes the type declared for it, and
-    /// a structure it wrote as JSON text is decoded. String enum values may
+    /// a nested structure it wrote as JSON text is decoded. String enum values may
     /// lose outer whitespace or change case when that names one candidate;
     /// enum correction never changes JSON type. The violations describe the
     /// repaired value, so one report names everything still wrong instead of
@@ -103,14 +109,17 @@ impl Schema {
     ///
     /// let schema = Schema::new(json!({
     ///     "type": "object",
-    ///     "properties": { "line": { "type": "integer" } },
+    ///     "properties": {
+    ///         "line": { "type": "integer" },
+    ///         "meta": { "type": "object" }
+    ///     },
     ///     "required": ["line"],
     /// }))
     /// .unwrap();
     ///
-    /// // A string an agent double-encoded is decoded, then validated.
-    /// let (decoded, _) = schema.validate(json!("{\"line\": 12}")).unwrap();
-    /// assert_eq!(decoded, json!({ "line": 12 }));
+    /// // A nested object an agent double-encoded is decoded, then validated.
+    /// let (decoded, _) = schema.validate(json!({ "line": 12, "meta": "{\"source\": \"web\"}" })).unwrap();
+    /// assert_eq!(decoded["meta"], json!({ "source": "web" }));
     ///
     /// // A number an agent quoted is retyped to what the schema declares, and
     /// // the repair names where it happened.
@@ -996,7 +1005,10 @@ impl Node {
     fn coerce(&self, value: &mut Value, instance_path: &str, out: &mut Vec<String>) {
         if let Some(types) = self.types.as_deref() {
             if !types.iter().any(|t| t.matches(value)) {
-                if let Some(retyped) = types.iter().find_map(|t| t.retype(value)) {
+                if let Some(retyped) = (!instance_path.is_empty())
+                    .then(|| types.iter().find_map(|t| t.retype(value)))
+                    .flatten()
+                {
                     *value = retyped;
                     out.push(instance_path.to_string());
                 }
@@ -1144,6 +1156,32 @@ mod tests {
         schema.validate(value).unwrap().0
     }
 
+    /// Compile any root shape so the validator's nested scalar and array
+    /// behavior can be tested independently of the public object-root contract.
+    fn value_schema(document: Value) -> Result<Schema, SchemaParseError> {
+        let compiled = compile(&document, "")?;
+        Ok(Schema {
+            inner: Arc::new(SchemaBody {
+                compiled,
+                raw_document: document,
+            }),
+        })
+    }
+
+    #[test]
+    fn public_schemas_require_an_object_root() {
+        for document in [
+            json!({"type": "string"}),
+            json!({"type": "array"}),
+            json!({"type": "boolean"}),
+            json!(true),
+            json!({"properties": {}}),
+        ] {
+            let err = Schema::new(document).unwrap_err();
+            assert!(err.message.contains("top-level type must be object"));
+        }
+    }
+
     #[test]
     fn compiles_a_document_written_as_json_text() {
         let schema = Schema::try_from(r#"{"type": "object", "required": ["path"]}"#).unwrap();
@@ -1159,20 +1197,20 @@ mod tests {
 
     #[test]
     fn json_text_the_compiler_refuses_reports_the_keyword() {
-        let err = Schema::try_from(r#"{"uniqueItems": true}"#).unwrap_err();
+        let err = Schema::try_from(r#"{"type":"object","uniqueItems":true}"#).unwrap_err();
         assert!(err.message.contains("unsupported keyword `uniqueItems`"));
     }
 
     #[test]
     fn parse_rejects_malformed_schema() {
         let bad = json!({"type": 42});
-        let err = Schema::new(bad).unwrap_err();
+        let err = value_schema(bad).unwrap_err();
         assert!(err.message.contains("`type` must be"));
     }
 
     #[test]
     fn parse_rejects_unknown_type_label() {
-        let err = Schema::new(json!({"type": "thingy"})).unwrap_err();
+        let err = value_schema(json!({"type": "thingy"})).unwrap_err();
         assert!(err.message.contains("unknown type"));
     }
 
@@ -1180,50 +1218,50 @@ mod tests {
     fn parse_rejects_unsupported_keyword() {
         // The limit has to be reported at parse time, or the schema silently
         // passes values `uniqueItems` was written to constrain.
-        let err = Schema::new(json!({"type": "array", "uniqueItems": true})).unwrap_err();
+        let err = value_schema(json!({"type": "array", "uniqueItems": true})).unwrap_err();
         assert!(err.message.contains("unsupported keyword `uniqueItems`"));
     }
 
     #[test]
     fn parse_rejects_additional_properties_subschema_form() {
-        let err = Schema::new(json!({"additionalProperties": {"type": "integer"}})).unwrap_err();
+        let err = value_schema(json!({"additionalProperties": {"type": "integer"}})).unwrap_err();
         assert!(err.message.contains("subschema form is unsupported"));
     }
 
     #[test]
     fn parse_rejects_invalid_regex() {
-        let err = Schema::new(json!({"pattern": "["})).unwrap_err();
+        let err = value_schema(json!({"pattern": "["})).unwrap_err();
         assert!(err.message.contains("pattern"));
     }
 
     #[test]
     fn parse_rejects_empty_all_of() {
-        let err = Schema::new(json!({"allOf": []})).unwrap_err();
+        let err = value_schema(json!({"allOf": []})).unwrap_err();
         assert!(err.message.contains("allOf"));
     }
 
     #[test]
     fn parse_rejects_empty_any_of() {
-        let err = Schema::new(json!({"anyOf": []})).unwrap_err();
+        let err = value_schema(json!({"anyOf": []})).unwrap_err();
         assert!(err.message.contains("anyOf"));
     }
 
     #[test]
     fn parse_rejects_empty_one_of() {
-        let err = Schema::new(json!({"oneOf": []})).unwrap_err();
+        let err = value_schema(json!({"oneOf": []})).unwrap_err();
         assert!(err.message.contains("oneOf"));
     }
 
     #[test]
     fn validate_type_rejects_wrong_kind() {
-        let schema = Schema::new(json!({"type": "object", "required": ["status"]})).unwrap();
+        let schema = value_schema(json!({"type": "object", "required": ["status"]})).unwrap();
         assert!(schema.validate(json!({"status": "ok"})).is_ok());
         assert!(schema.validate(json!(42)).is_err());
     }
 
     #[test]
     fn validate_type_array_accepts_any_listed() {
-        let schema = Schema::new(json!({"type": ["string", "null"]})).unwrap();
+        let schema = value_schema(json!({"type": ["string", "null"]})).unwrap();
         assert!(schema.validate(json!("hi")).is_ok());
         assert!(schema.validate(json!(null)).is_ok());
         assert!(schema.validate(json!(1)).is_err());
@@ -1231,42 +1269,42 @@ mod tests {
 
     #[test]
     fn validate_integer_accepts_whole_floats() {
-        let schema = Schema::new(json!({"type": "integer"})).unwrap();
+        let schema = value_schema(json!({"type": "integer"})).unwrap();
         assert!(schema.validate(json!(1.0)).is_ok());
         assert!(schema.validate(json!(1.5)).is_err());
     }
 
     #[test]
     fn boolean_true_schema_accepts_anything() {
-        let schema = Schema::new(json!(true)).unwrap();
+        let schema = value_schema(json!(true)).unwrap();
         assert!(schema.validate(json!(null)).is_ok());
         assert!(schema.validate(json!({"a": [1, 2]})).is_ok());
     }
 
     #[test]
     fn boolean_false_schema_rejects_everything() {
-        let schema = Schema::new(json!(false)).unwrap();
+        let schema = value_schema(json!(false)).unwrap();
         assert!(schema.validate(json!(null)).is_err());
         assert!(schema.validate(json!("anything")).is_err());
     }
 
     #[test]
     fn validate_enum_rejects_value_not_in_list() {
-        let schema = Schema::new(json!({"enum": ["a", "b", "c"]})).unwrap();
+        let schema = value_schema(json!({"enum": ["a", "b", "c"]})).unwrap();
         assert!(schema.validate(json!("b")).is_ok());
         assert!(schema.validate(json!("z")).is_err());
     }
 
     #[test]
     fn validate_const_rejects_non_matching_value() {
-        let schema = Schema::new(json!({"const": 42})).unwrap();
+        let schema = value_schema(json!({"const": 42})).unwrap();
         assert!(schema.validate(json!(42)).is_ok());
         assert!(schema.validate(json!(43)).is_err());
     }
 
     #[test]
     fn a_unique_string_enum_ignores_case_and_outer_whitespace() {
-        let schema = Schema::new(json!({"type": "string", "enum": ["content", "count"]})).unwrap();
+        let schema = value_schema(json!({"type": "string", "enum": ["content", "count"]})).unwrap();
         assert_eq!(kept(&schema, json!("Content")), json!("content"));
         assert_eq!(kept(&schema, json!(" count ")), json!("count"));
     }
@@ -1274,13 +1312,13 @@ mod tests {
     #[test]
     fn an_ambiguous_string_enum_is_not_rewritten() {
         // Neither spelling is the one meant, so the violation names the value.
-        let schema = Schema::new(json!({"enum": ["draft", "Draft"]})).unwrap();
+        let schema = value_schema(json!({"enum": ["draft", "Draft"]})).unwrap();
         assert!(schema.validate(json!("DRAFT")).is_err());
     }
 
     #[test]
     fn validate_reads_an_enum_value_with_no_declared_type() {
-        let schema = Schema::new(json!({"enum": ["open", "closed"]})).unwrap();
+        let schema = value_schema(json!({"enum": ["open", "closed"]})).unwrap();
         assert_eq!(kept(&schema, json!("OPEN")), json!("open"));
     }
 
@@ -1291,13 +1329,13 @@ mod tests {
             (json!({"enum": [true]}), json!("true")),
             (json!({"enum": [1]}), json!("1")),
         ] {
-            assert!(Schema::new(schema).unwrap().validate(written).is_err());
+            assert!(value_schema(schema).unwrap().validate(written).is_err());
         }
     }
 
     #[test]
     fn validate_names_the_pointer_of_an_enum_it_read() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
             "properties": {"mode": {"enum": ["content"]}},
         }))
@@ -1308,7 +1346,7 @@ mod tests {
 
     #[test]
     fn validate_passes_conforming_object() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
             "properties": { "name": { "type": "string" } },
             "required": ["name"],
@@ -1319,7 +1357,7 @@ mod tests {
 
     #[test]
     fn validate_reports_each_violation_with_path() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
             "properties": {
                 "name": { "type": "string" },
@@ -1343,7 +1381,7 @@ mod tests {
 
     #[test]
     fn validate_reports_missing_required() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
             "properties": { "x": { "type": "string" } },
             "required": ["x", "y"],
@@ -1355,7 +1393,7 @@ mod tests {
 
     #[test]
     fn validate_additional_properties_forbidden() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
             "properties": { "x": { "type": "string" } },
             "additionalProperties": false,
@@ -1369,7 +1407,7 @@ mod tests {
     #[test]
     fn validate_items_schema_validates_each_element() {
         let schema =
-            Schema::new(json!({"type": "array", "items": {"type": "integer", "minimum": 0}}))
+            value_schema(json!({"type": "array", "items": {"type": "integer", "minimum": 0}}))
                 .unwrap();
         assert!(schema.validate(json!([1, 2, 3])).is_ok());
         let violations = schema.validate(json!([0, -1])).unwrap_err();
@@ -1378,7 +1416,7 @@ mod tests {
 
     #[test]
     fn validate_prefix_items_uses_each_positional_schema() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "array",
             "prefixItems": [{"type": "integer"}, {"type": "string"}],
             "minItems": 2,
@@ -1394,7 +1432,7 @@ mod tests {
 
     #[test]
     fn validate_items_starts_after_prefix_items() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "array",
             "prefixItems": [{"type": "integer"}],
             "items": {"type": "string"},
@@ -1408,7 +1446,7 @@ mod tests {
 
     #[test]
     fn validate_min_items_requires_minimum_count() {
-        let schema = Schema::new(json!({"type": "array", "minItems": 1})).unwrap();
+        let schema = value_schema(json!({"type": "array", "minItems": 1})).unwrap();
         assert!(schema.validate(json!([1])).is_ok());
         let violations = schema.validate(json!([])).unwrap_err();
         assert!(violations
@@ -1418,7 +1456,7 @@ mod tests {
 
     #[test]
     fn validate_max_items_rejects_excess_count() {
-        let schema = Schema::new(json!({"type": "array", "maxItems": 2})).unwrap();
+        let schema = value_schema(json!({"type": "array", "maxItems": 2})).unwrap();
         assert!(schema.validate(json!([1, 2])).is_ok());
         let violations = schema.validate(json!([1, 2, 3])).unwrap_err();
         assert!(violations
@@ -1429,7 +1467,7 @@ mod tests {
     #[test]
     fn validate_string_length_bounds() {
         let schema =
-            Schema::new(json!({"type": "string", "minLength": 2, "maxLength": 4})).unwrap();
+            value_schema(json!({"type": "string", "minLength": 2, "maxLength": 4})).unwrap();
         assert!(schema.validate(json!("ok")).is_ok());
         assert!(schema.validate(json!("a")).is_err());
         assert!(schema.validate(json!("toolong")).is_err());
@@ -1437,7 +1475,7 @@ mod tests {
 
     #[test]
     fn validate_pattern_matches_string() {
-        let schema = Schema::new(json!({"pattern": "^foo"})).unwrap();
+        let schema = value_schema(json!({"pattern": "^foo"})).unwrap();
         assert!(schema.validate(json!("foobar")).is_ok());
         let violations = schema.validate(json!("bar")).unwrap_err();
         assert!(violations
@@ -1447,19 +1485,19 @@ mod tests {
 
     #[test]
     fn validate_pattern_is_unanchored() {
-        let schema = Schema::new(json!({"pattern": "foo"})).unwrap();
+        let schema = value_schema(json!({"pattern": "foo"})).unwrap();
         assert!(schema.validate(json!("barfoobar")).is_ok());
     }
 
     #[test]
     fn validate_pattern_ignored_for_non_strings() {
-        let schema = Schema::new(json!({"pattern": "foo"})).unwrap();
+        let schema = value_schema(json!({"pattern": "foo"})).unwrap();
         assert!(schema.validate(json!(42)).is_ok());
     }
 
     #[test]
     fn validate_minimum_and_maximum_bounds() {
-        let schema = Schema::new(json!({"minimum": 0, "maximum": 10})).unwrap();
+        let schema = value_schema(json!({"minimum": 0, "maximum": 10})).unwrap();
         assert!(schema.validate(json!(5)).is_ok());
         assert!(schema.validate(json!(-1)).is_err());
         assert!(schema.validate(json!(11)).is_err());
@@ -1467,7 +1505,7 @@ mod tests {
 
     #[test]
     fn validate_all_of_passes_when_all_schemas_match() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "allOf": [
                 { "type": "object" },
                 { "required": ["name"] },
@@ -1480,7 +1518,7 @@ mod tests {
 
     #[test]
     fn validate_all_of_collects_violations_from_all_failing_schemas() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "allOf": [
                 { "required": ["a"] },
                 { "required": ["b"] },
@@ -1494,7 +1532,7 @@ mod tests {
 
     #[test]
     fn validate_any_of_passes_when_at_least_one_matches() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "anyOf": [
                 { "type": "string" },
                 { "type": "number" },
@@ -1511,7 +1549,7 @@ mod tests {
 
     #[test]
     fn validate_one_of_requires_exactly_one_match() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "oneOf": [
                 { "type": "string" },
                 { "type": "number" },
@@ -1524,7 +1562,7 @@ mod tests {
         assert!(none.iter().any(|v| v.message.contains("oneOf")));
 
         // A number matches both `number` and `minimum`, so oneOf fails.
-        let both = Schema::new(json!({
+        let both = value_schema(json!({
             "oneOf": [
                 { "type": "number" },
                 { "minimum": 0 },
@@ -1537,7 +1575,7 @@ mod tests {
 
     #[test]
     fn validate_not_inverts_subschema() {
-        let schema = Schema::new(json!({"not": {"type": "string"}})).unwrap();
+        let schema = value_schema(json!({"not": {"type": "string"}})).unwrap();
         assert!(schema.validate(json!(42)).is_ok());
         let violations = schema.validate(json!("hello")).unwrap_err();
         assert!(violations
@@ -1547,7 +1585,7 @@ mod tests {
 
     #[test]
     fn validate_if_then_applies_then_when_if_passes() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "if":   { "type": "string" },
             "then": { "minLength": 3 },
         }))
@@ -1559,7 +1597,7 @@ mod tests {
 
     #[test]
     fn validate_if_then_else_selects_correct_branch() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "if":   { "type": "string" },
             "then": { "minLength": 3 },
             "else": { "minimum": 0 },
@@ -1573,7 +1611,7 @@ mod tests {
 
     #[test]
     fn validate_if_without_then_else_has_no_effect() {
-        let schema = Schema::new(json!({"if": {"type": "string"}})).unwrap();
+        let schema = value_schema(json!({"if": {"type": "string"}})).unwrap();
         assert!(schema.validate(json!("hello")).is_ok());
         assert!(schema.validate(json!(42)).is_ok());
     }
@@ -1581,7 +1619,7 @@ mod tests {
     /// An object whose `action` decides which other fields are required, the
     /// shape every tool taking an `action` argument declares.
     fn discriminated_schema() -> Schema {
-        Schema::new(json!({
+        value_schema(json!({
             "type": "object",
             "properties": {
                 "action": { "type": "string", "enum": ["write", "read"] },
@@ -1661,7 +1699,7 @@ mod tests {
 
     #[test]
     fn validate_retypes_a_value_under_the_branch_it_selected() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
             "properties": { "mode": { "type": "string" } },
             "if": {
@@ -1679,7 +1717,7 @@ mod tests {
 
     #[test]
     fn validate_returns_a_conforming_value_unchanged() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
             "properties": { "status": { "type": "string" } },
             "required": ["status"],
@@ -1691,29 +1729,44 @@ mod tests {
 
     #[test]
     fn validate_decodes_a_string_encoded_object() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
-            "properties": { "status": { "type": "string" } },
-            "required": ["status"],
+            "properties": {
+                "result": {
+                    "type": "object",
+                    "properties": { "status": { "type": "string" } },
+                    "required": ["status"],
+                },
+            },
+            "required": ["result"],
         }))
         .unwrap();
-        let encoded = json!("{\"status\": \"ok\"}");
+        let encoded = json!({"result": "{\"status\": \"ok\"}"});
         let (decoded, _) = schema.validate(encoded).unwrap();
-        assert_eq!(decoded, json!({"status": "ok"}));
+        assert_eq!(decoded, json!({"result": {"status": "ok"}}));
     }
 
     #[test]
     fn validate_decodes_a_long_string_encoded_object() {
         // A long report is the one an agent is most likely to double-encode.
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
-            "properties": { "details": { "type": "string" } },
-            "required": ["details"],
+            "properties": {
+                "report": {
+                    "type": "object",
+                    "properties": { "details": { "type": "string" } },
+                    "required": ["details"],
+                },
+            },
+            "required": ["report"],
         }))
         .unwrap();
         let details = "d".repeat(100_000);
         let encoded = serde_json::to_string(&json!({ "details": details })).unwrap();
-        assert_eq!(kept(&schema, json!(encoded)), json!({ "details": details }));
+        assert_eq!(
+            kept(&schema, json!({"report": encoded})),
+            json!({"report": { "details": details }})
+        );
     }
 
     #[test]
@@ -1721,8 +1774,17 @@ mod tests {
         // The string decodes to a valid object that still fails `required`.
         // What the retry has to fix is the missing property, not the quoting
         // the decode already saw through.
-        let schema = Schema::new(json!({"type": "object", "required": ["status"]})).unwrap();
-        let violations = schema.validate(json!("{\"other\": 1}")).unwrap_err();
+        let schema = value_schema(json!({
+            "type": "object",
+            "properties": {
+                "result": {"type": "object", "required": ["status"]},
+            },
+            "required": ["result"],
+        }))
+        .unwrap();
+        let violations = schema
+            .validate(json!({"result": "{\"other\": 1}"}))
+            .unwrap_err();
         assert!(violations
             .iter()
             .any(|v| v.message.contains("missing required property `status`")));
@@ -1733,12 +1795,12 @@ mod tests {
 
     #[test]
     fn validate_non_string_fails_type_check_without_decode_attempt() {
-        let schema = Schema::new(json!({"type": "object", "required": ["status"]})).unwrap();
+        let schema = value_schema(json!({"type": "object", "required": ["status"]})).unwrap();
         assert!(schema.validate(json!(42)).is_err());
     }
 
     fn line_schema() -> Schema {
-        Schema::new(json!({
+        value_schema(json!({
             "type": "object",
             "properties": { "line": { "type": "integer" } },
             "required": ["line"],
@@ -1756,29 +1818,58 @@ mod tests {
 
     #[test]
     fn a_quoted_decimal_remains_a_number() {
-        let schema = Schema::new(json!({"type": "number"})).unwrap();
-        assert_eq!(kept(&schema, json!("2.5")), json!(2.5));
+        let schema = value_schema(json!({
+            "type": "object",
+            "properties": {"value": {"type": "number"}},
+            "required": ["value"],
+        }))
+        .unwrap();
+        assert_eq!(
+            kept(&schema, json!({"value": "2.5"})),
+            json!({"value": 2.5})
+        );
     }
 
     #[test]
     fn a_quoted_large_number_keeps_its_exact_integer() {
-        let schema = Schema::new(json!({"type": "number"})).unwrap();
+        let schema = value_schema(json!({
+            "type": "object",
+            "properties": {"value": {"type": "number"}},
+            "required": ["value"],
+        }))
+        .unwrap();
         assert_eq!(
-            kept(&schema, json!("9007199254740993")),
-            json!(9_007_199_254_740_993_u64)
+            kept(&schema, json!({"value": "9007199254740993"})),
+            json!({"value": 9_007_199_254_740_993_u64})
         );
     }
 
     #[test]
     fn a_quoted_unsigned_integer_keeps_its_exact_value() {
-        let schema = Schema::new(json!({"type": "integer"})).unwrap();
-        assert_eq!(kept(&schema, json!(u64::MAX.to_string())), json!(u64::MAX));
+        let schema = value_schema(json!({
+            "type": "object",
+            "properties": {"value": {"type": "integer"}},
+            "required": ["value"],
+        }))
+        .unwrap();
+        assert_eq!(
+            kept(&schema, json!({"value": u64::MAX.to_string()})),
+            json!({"value": u64::MAX})
+        );
     }
 
     #[test]
     fn validate_retypes_a_quoted_boolean() {
-        let schema = Schema::new(json!({"type": "boolean"})).unwrap();
-        assert_eq!(kept(&schema, json!("true")), json!(true));
+        let schema = value_schema(json!({
+            "type": "object",
+            "properties": {"value": {"type": "boolean"}},
+            "required": ["value"],
+        }))
+        .unwrap();
+        assert_eq!(
+            kept(&schema, json!({"value": "true"})),
+            json!({"value": true})
+        );
     }
 
     #[test]
@@ -1802,7 +1893,7 @@ mod tests {
 
     #[test]
     fn malformed_and_non_finite_numbers_are_rejected() {
-        let schema = Schema::new(json!({"type": ["number", "null"]})).unwrap();
+        let schema = value_schema(json!({"type": ["number", "null"]})).unwrap();
         for written in ["inf", "NaN", "01", "+1"] {
             assert!(schema.validate(json!(written)).is_err(), "{written}");
         }
@@ -1811,13 +1902,13 @@ mod tests {
     #[test]
     fn validate_leaves_the_text_null_alone() {
         // No retype produces null, so the text stays a value in its own right.
-        let schema = Schema::new(json!({"type": "null"})).unwrap();
+        let schema = value_schema(json!({"type": "null"})).unwrap();
         assert!(schema.validate(json!("null")).is_err());
     }
 
     #[test]
     fn validate_decodes_a_nested_json_string_into_an_array() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
             "properties": { "lines": { "type": "array", "items": { "type": "integer" } } },
             "required": ["lines"],
@@ -1831,7 +1922,7 @@ mod tests {
 
     #[test]
     fn validate_retypes_each_element_of_an_array() {
-        let schema = Schema::new(json!({"type": "array", "items": {"type": "integer"}})).unwrap();
+        let schema = value_schema(json!({"type": "array", "items": {"type": "integer"}})).unwrap();
         assert_eq!(kept(&schema, json!(["1", "2"])), json!([1, 2]));
     }
 
@@ -1840,12 +1931,12 @@ mod tests {
         // Stringifying the number or wrapping the lone value would pass the
         // check with a value the model never wrote; the violation asks for the
         // right shape instead.
-        let string = Schema::new(json!({"type": "string"})).unwrap();
+        let string = value_schema(json!({"type": "string"})).unwrap();
         let violations = string.validate(json!(42)).unwrap_err();
         assert!(violations
             .iter()
             .any(|v| v.message.contains("send the value quoted")));
-        let array = Schema::new(json!({"type": "array", "items": {"type": "string"}})).unwrap();
+        let array = value_schema(json!({"type": "array", "items": {"type": "string"}})).unwrap();
         assert!(array.validate(json!("urgent")).is_err());
     }
 
@@ -1853,7 +1944,7 @@ mod tests {
     fn validate_does_not_retype_inside_a_union_branch() {
         // Reading `"42"` as the integer branch would also choose the branch,
         // so the violation names the mismatch instead.
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "anyOf": [{ "type": "integer" }, { "type": "boolean" }],
         }))
         .unwrap();
@@ -1864,7 +1955,7 @@ mod tests {
     fn validate_reports_only_what_a_retype_could_not_recover() {
         // `line` retypes but `name` cannot, so the whole value still fails.
         // Only `name` is reported: it is the one thing a retry has to change.
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
             "properties": {
                 "line": { "type": "integer" },
@@ -1885,9 +1976,21 @@ mod tests {
 
     #[test]
     fn validate_retypes_inside_a_decoded_string() {
+        let schema = value_schema(json!({
+            "type": "object",
+            "properties": {
+                "result": {
+                    "type": "object",
+                    "properties": {"line": {"type": "integer"}},
+                    "required": ["line"],
+                },
+            },
+            "required": ["result"],
+        }))
+        .unwrap();
         assert_eq!(
-            kept(&line_schema(), json!("{\"line\": \"42\"}")),
-            json!({"line": 42})
+            kept(&schema, json!({"result": "{\"line\": \"42\"}"})),
+            json!({"result": {"line": 42}})
         );
     }
 
@@ -1899,9 +2002,22 @@ mod tests {
 
     #[test]
     fn validate_reports_a_decode_before_the_retype_it_enabled() {
-        // The decode is the root's own retype, so it carries the empty pointer.
-        let (_, repaired) = line_schema().validate(json!("{\"line\": \"42\"}")).unwrap();
-        assert_eq!(repaired, vec!["", "/line"]);
+        let schema = value_schema(json!({
+            "type": "object",
+            "properties": {
+                "result": {
+                    "type": "object",
+                    "properties": {"line": {"type": "integer"}},
+                    "required": ["line"],
+                },
+            },
+            "required": ["result"],
+        }))
+        .unwrap();
+        let (_, repaired) = schema
+            .validate(json!({"result": "{\"line\": \"42\"}"}))
+            .unwrap();
+        assert_eq!(repaired, vec!["/result", "/result/line"]);
     }
 
     #[test]
@@ -1922,7 +2038,7 @@ mod tests {
 
     #[test]
     fn clone_shares_compiled_state() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
             "properties": { "x": { "type": "string" } },
             "required": ["x"],
@@ -1944,7 +2060,7 @@ mod tests {
             "properties": { "name": { "type": "string" } },
             "required": ["name"],
         });
-        let schema = Schema::new(document.clone()).unwrap();
+        let schema = value_schema(document.clone()).unwrap();
         let serialised = serde_json::to_value(&schema).unwrap();
         assert_eq!(serialised, document);
         let restored: Schema = serde_json::from_value(serialised).unwrap();
@@ -1960,7 +2076,7 @@ mod tests {
 
     #[test]
     fn violations_display_renders_one_line_per_violation() {
-        let schema = Schema::new(json!({
+        let schema = value_schema(json!({
             "type": "object",
             "properties": { "x": { "type": "string" } },
             "required": ["x", "y"],

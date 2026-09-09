@@ -1943,8 +1943,6 @@ Not bound: it is how `CommandTool` reads one command line.
 | Rust | `DEFINITION: string` | private |
 | Rust | `FinishTool.NAME: string = "finish"` | crate |
 | Rust | `.from_schema(schema: Schema?): Tool` | crate |
-| Rust | `arguments_schema(schema: Schema?, envelope: json): json` | private |
-| Rust | `normalize_input(input: json, envelope: json): json` | private |
 
 ## `crates/agentwerk/src/tools/task/mod.rs`
 

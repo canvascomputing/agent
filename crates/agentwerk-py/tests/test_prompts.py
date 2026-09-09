@@ -8,7 +8,7 @@ import agentwerk as aw
 
 
 async def test_shared_template_values_are_inserted_literally(werk, scripted_openai):
-    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    scripted_openai.respond_with_tool("finish", {"answer": "done"})
     werk.set_templates(
         {
             "company": "Acme",
@@ -33,11 +33,11 @@ async def test_direct_aql_expressions_resolve_results_and_paths(
 ):
     first = werk.add_task(aw.Task("first", label="research"))
     second = werk.add_task(aw.Task("second", label="research"))
-    werk.set_task_finished(first, "one {{ company }}")
+    werk.set_task_finished(first, {"research": "one {{ company }}"})
     werk.set_task_finished(second, {"answer": 42})
     second_path = (tmp_path / "tasks" / second / "result.json").resolve()
     role = f"{{{{ result: research }}}} | {{{{ result_path: {second} }}}}"
-    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    scripted_openai.respond_with_tool("finish", {"answer": "done"})
     werk.add_agent(
         aw.Agent()
         .provider(scripted_openai.provider())
@@ -47,8 +47,12 @@ async def test_direct_aql_expressions_resolve_results_and_paths(
     werk.add_task("{{ results: research ORDER BY task.id DESC }}")
     await asyncio.wait_for(werk.finish(), timeout=5)
     messages = scripted_openai.requests[0]["messages"]
-    assert messages[0]["content"] == f"one {{{{ company }}}} | {second_path}"
-    assert messages[1]["content"] == '[{"answer":42},"one {{ company }}"]'
+    assert messages[0]["content"] == (
+        f'{{"research":"one {{{{ company }}}}"}} | {second_path}'
+    )
+    assert messages[1]["content"] == (
+        '[{"answer":42},{"research":"one {{ company }}"}]'
+    )
 
 
 async def test_nested_query_values_and_readable_results(
@@ -59,7 +63,7 @@ async def test_nested_query_values_and_readable_results(
     werk.set_task_finished(first, {"title": "Market", "empty": None})
     werk.set_task_finished(second, ["one", None, "two"])
     werk.set_templates({"selection": "task.label = research"})
-    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    scripted_openai.respond_with_tool("finish", {"answer": "done"})
     werk.add_agent(
         aw.Agent()
         .provider(scripted_openai.provider())
@@ -75,7 +79,7 @@ async def test_nested_query_values_and_readable_results(
 
 async def test_task_prompts_stay_fixed_after_the_first_request(werk, scripted_openai):
     scripted_openai.respond_with_tool("step", {})
-    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    scripted_openai.respond_with_tool("finish", {"answer": "done"})
 
     @aw.tool
     def step():
@@ -126,7 +130,7 @@ async def test_prompt_render_failure_reaches_hooks_without_a_provider_request(
 
 async def test_template_cycles_are_inserted_literally(werk, scripted_openai):
     werk.set_templates({"a": "{{ b }}", "b": "{{ a }}"})
-    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    scripted_openai.respond_with_tool("finish", {"answer": "done"})
     werk.add_agent(
         aw.Agent().provider(scripted_openai.provider()).model("mock").role("{{ a }}")
     )
@@ -144,7 +148,7 @@ async def test_reload_uses_only_templates_restored_by_the_caller(
     loaded = aw.Werk.load(str(tmp_path))
     loaded.set_template("company", "New")
     loaded.add_agent(aw.Agent().provider(scripted_openai.provider()).model("mock"))
-    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    scripted_openai.respond_with_tool("finish", {"answer": "done"})
     await asyncio.wait_for(loaded.finish(), timeout=5)
     user = [
         message
@@ -168,7 +172,7 @@ async def test_bulk_string_conversion_failure_is_atomic(
     for update in [werk.set_templates, agent.templates]:
         with pytest.raises(TypeError):
             update({"company": "New", "missing": tmp_path / "absent.md"})
-    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    scripted_openai.respond_with_tool("finish", {"answer": "done"})
     werk.add_task("go")
     await asyncio.wait_for(werk.finish(), timeout=5)
     assert scripted_openai.requests[0]["messages"][0]["content"] == "Old"

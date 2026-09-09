@@ -598,11 +598,11 @@ mod tests {
     fn quoted_braces_inside_aql_do_not_end_the_expression() {
         let (werk, _dir) = session();
         let id = werk.add_task(Task::labeled("research}notes", "go"));
-        werk.set_task_finished(&id, serde_json::json!("found"))
+        werk.set_task_finished(&id, serde_json::json!({"research": "found"}))
             .unwrap();
         assert_eq!(
             render(&werk, r#"{{ result: task.label = "research}notes" }}"#).unwrap(),
-            "found"
+            r#"{"research":"found"}"#
         );
     }
 
@@ -668,7 +668,7 @@ mod tests {
     fn result_path_selectors_return_existing_absolute_files() {
         let (werk, dir) = session();
         let id = werk.add_task("go");
-        werk.set_task_finished(&id, serde_json::json!("done"))
+        werk.set_task_finished(&id, serde_json::json!({"answer": "done"}))
             .unwrap();
         let path = dir
             .path()

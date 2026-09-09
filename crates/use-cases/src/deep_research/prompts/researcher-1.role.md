@@ -16,6 +16,6 @@ You establish the key facts and events related to the task's question. Researche
 
 ## Output
 
-Call `finish({"result": "..."})` once.
+Call `finish({"research": "..."})` once.
 
-- `result` (400–1000 characters): several full sentences of plain prose establishing the key facts and events, with every factual claim followed by `Source: <url>`.
+- `research` (400–1000 characters): several full sentences of plain prose establishing the key facts and events, with every factual claim followed by `Source: <url>`.

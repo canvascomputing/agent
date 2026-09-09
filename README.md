@@ -64,7 +64,7 @@ use agentwerk::tools::{GrepTool, ReadFileTool};
 #[tokio::main]
 async fn main() {
     let agent = Agent::from_env()
-        .role("You are a Rust developer who explores source files to answer questions.")
+        .role("Explore Rust source files and answer the question.")
         .tool(ReadFileTool)
         .tool(GrepTool);
 
@@ -562,7 +562,7 @@ Results live in the session directory, one `result.json` per task.
 
 ### Schemas
 
-A `Schema` defines the required shape of a task result.
+A `Schema` constrains a task result.
 
 ```rust
 use agentwerk::schemas::Schema;
@@ -579,7 +579,7 @@ werk.add_task(Task::new("Write a report.").schema(schema));
 <details>
 <summary>Schema reference</summary>
 
-Quoted JSON numbers, booleans, objects, and arrays are converted to the schema's expected type. String enums allow case and outer-whitespace corrections when they identify one candidate; enum correction never changes JSON type. Other result violations trigger a retry, subject to `max_schema_retries`.
+Agentwerk corrects common result-formatting mistakes, such as a quoted number or a nested object encoded as JSON text. Schema-bound results must be objects; remaining schema violations trigger a retry, subject to `max_schema_retries`. Without a schema, a task may return any JSON value.
 
 Use shallow, focused schemas for small models. Split complex work into tasks with separate schemas.
 
@@ -724,6 +724,21 @@ let agent = Agent::new()
     .tool(CommandTool::new("git").allow("git *"));
 ```
 
+### FinishTool
+
+Agents use `FinishTool` to end their task and share their outcomes:
+
+```json
+{
+  "answer": "The configuration is loaded in src/config.rs.",
+  "confidence": 0.9
+}
+```
+
+To return an object result, the agent must call `FinishTool`. If the task has a result schema, the tool validates the object against it. For a non-interactive task without a schema, the agent can instead finish by responding with plain text.
+
+[Interactive agents](#interactive) are the exception: they have no `FinishTool` unless you add one explicitly with `.tool(FinishTool)`.
+
 <details>
 <summary>Tool reference</summary>
 
@@ -761,18 +776,6 @@ let patient_fetch = FetchTool::new().timeout(Duration::ZERO);
 | `GrepTool` | 180 seconds |
 | `CommandTool` | The call's `timeout_ms`, or 120 seconds if omitted |
 
-#### `FinishTool` and `KnowledgeTool`
-
-`KnowledgeTool` is registered automatically. Non-interactive agents also get `FinishTool`; [interactive agents](#interactive) receive it only if you add it. Add `EventTool` explicitly to enable custom events.
-
-When a task carries an object schema, its displayed fields are the `finish` call: pass them directly. Scalar and unbound tasks retain the explicit `result` envelope:
-
-```json
-{
-  "result": "..."
-}
-```
-
 #### EventTool
 
 Give an agent `EventTool` to let it publish custom events:
@@ -794,12 +797,12 @@ The model supplies a name and optional JSON data:
 
 Events carry the current task and agent context; see [Events](#events) for handlers and queries. Names are unrestricted; lowercase snake case is conventional.
 
-Only `task_finished` completes the current task. Its result goes in `data.result`, including when the result is an object:
+Only `task_finished` completes the current task. Its `data` is the result object:
 
 ```json
 {
   "name": "task_finished",
-  "data": { "result": "..." }
+  "data": { "answer": "..." }
 }
 ```
 
@@ -873,7 +876,7 @@ use agentwerk::Event;
 
 werk.on_event(|_, event| {
     if event.get_name() == Event::TASK_FINISHED {
-        eprintln!("{}", event.get_data()["result"]);
+        eprintln!("{}", event.get_data()["answer"]);
     }
 });
 ```
@@ -1061,6 +1064,8 @@ let store = Knowledge::load("./notes")?;
 let alice = Agent::new().knowledge(&store);
 let bob = Agent::new().knowledge(&store);
 ```
+
+Agents configured with a store can read and update its shared pages through `KnowledgeTool`.
 
 <details>
 <summary>Knowledge reference</summary>

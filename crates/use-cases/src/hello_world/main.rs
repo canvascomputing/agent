@@ -20,15 +20,16 @@ async fn main() {
         .nth(1)
         .unwrap_or_else(|| DEFAULT_TASK.into());
 
-    let agent =
-        Agent::from_env().role("You are a friendly greeter who answers in one short sentence.");
+    let agent = Agent::from_env().role(
+        "You are a friendly greeter. Finish with an `answer` field containing one short sentence.",
+    );
 
     agent.add_task(task);
 
     let mut results = agent.finish().await;
 
     match results.pop() {
-        Some(result) => println!("{}", result.as_str().unwrap_or_default()),
+        Some(result) => println!("{}", result["answer"].as_str().unwrap_or_default()),
         None => {
             eprintln!("the agent finished no task");
             std::process::exit(1);

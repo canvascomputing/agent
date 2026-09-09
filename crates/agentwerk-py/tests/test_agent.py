@@ -130,7 +130,7 @@ async def test_finish_methods_start_execution_and_convert_results(
     method, scripted_openai, tmp_path
 ):
     expected = {"answer": [42, True, None]}
-    scripted_openai.respond_with_tool("finish", {"result": expected})
+    scripted_openai.respond_with_tool("finish", expected)
     agent = (
         aw.Agent().provider(scripted_openai.provider()).model("mock").dir(str(tmp_path))
     )
@@ -170,6 +170,21 @@ async def test_finish_methods_select_across_the_shared_werk(offline_agent, werk)
         {"pages": 2}
     ]
     assert await offline_agent.finish() == [{"verdict": "clean"}, {"pages": 2}]
+
+
+async def test_schema_less_plain_text_becomes_the_exact_string_result(
+    scripted_openai, tmp_path
+):
+    scripted_openai.respond_with_text("  true\n")
+    agent = (
+        aw.Agent().provider(scripted_openai.provider()).model("mock").dir(str(tmp_path))
+    )
+    task = agent.add_task("answer exactly")
+
+    result = await asyncio.wait_for(agent.finish_task(task), timeout=5)
+
+    assert result == "  true\n"
+    assert len(scripted_openai.requests) == 1
 
 
 async def test_finish_methods_return_no_results_for_failed_tasks(offline_agent, werk):

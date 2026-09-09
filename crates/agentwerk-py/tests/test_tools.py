@@ -48,7 +48,7 @@ async def run_scripted_agent(scripted_openai, tmp_path, tool):
 
 async def run_scripted_tool(scripted_openai, tmp_path, tool, name, arguments):
     scripted_openai.respond_with_tool(name, arguments)
-    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    scripted_openai.respond_with_tool("finish", {"answer": "done"})
     return await run_scripted_agent(scripted_openai, tmp_path, tool)
 
 
@@ -224,13 +224,13 @@ def test_fixed_tuple_schema_enforces_length_and_position():
     def sample(value: Tuple[int, str]):
         return value
 
-    schema = aw.Schema(sample._agentwerk_schema["properties"]["value"])
+    schema = aw.Schema(sample._agentwerk_schema)
 
-    assert schema.validate([1, "one"])[0] == [1, "one"]
+    assert schema.validate({"value": [1, "one"]})[0] == {"value": [1, "one"]}
     with pytest.raises(RuntimeError):
-        schema.validate(["one", 1])
+        schema.validate({"value": ["one", 1]})
     with pytest.raises(RuntimeError):
-        schema.validate([1])
+        schema.validate({"value": [1]})
 
 
 async def test_inferred_schema_is_sent_to_the_model(scripted_openai, tmp_path):
@@ -238,7 +238,7 @@ async def test_inferred_schema_is_sent_to_the_model(scripted_openai, tmp_path):
     def lookup(path: str, limit: int = 20):
         return path
 
-    scripted_openai.respond_with_tool("finish", {"result": "done"})
+    scripted_openai.respond_with_tool("finish", {"answer": "done"})
     await run_scripted_agent(scripted_openai, tmp_path, lookup)
 
     tools = scripted_openai.requests[0]["tools"]
@@ -360,7 +360,7 @@ async def test_positive_python_timeout_fails_the_call_and_the_agent_continues(
         and event.get_data().get("tool_name") == "wait"
     )
     assert failure.get_directive() == "tool_timed_out"
-    assert results == ["done"]
+    assert results == [{"answer": "done"}]
     assert completed == []
 
 

@@ -9,7 +9,7 @@ use crate::agents::retry::{ExponentialRetry, Retry};
 use crate::agents::tasks::{Reply, Werk};
 use crate::event::Event;
 use crate::providers::types::StreamEvent;
-use crate::providers::{ContentBlock, ModelRequest, ProviderError};
+use crate::providers::{ModelRequest, ModelResponse, ProviderError};
 use crate::tools::Tool;
 
 impl Agent {
@@ -20,7 +20,7 @@ impl Agent {
         system_prompt: &str,
         policy: &Policy,
         tools: &[Tool],
-    ) -> Result<Option<Vec<ContentBlock>>, ProviderError> {
+    ) -> Result<Option<ModelResponse>, ProviderError> {
         let Some(task) = werk.get_task(task_id) else {
             return Ok(None);
         };
@@ -116,13 +116,7 @@ impl Agent {
                 "usage": response.usage,
             })),
         );
-        Ok(Some(
-            response
-                .content
-                .into_iter()
-                .filter(|block| matches!(block, ContentBlock::ToolUse { .. }))
-                .collect(),
-        ))
+        Ok(Some(response))
     }
 
     fn fail_request(&self, werk: &Werk, task_id: &str, error: &ProviderError) {

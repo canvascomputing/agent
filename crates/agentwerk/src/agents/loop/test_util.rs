@@ -98,7 +98,7 @@ pub fn write_result_response_named(tool_name: &str, result: &str) -> ModelRespon
         content: vec![ContentBlock::ToolUse {
             id: "call-1".into(),
             name: tool_name.into(),
-            input: serde_json::json!({ "result": result }),
+            input: serde_json::json!({ "answer": result }),
         }],
         status: ResponseStatus::ToolUse,
         usage: TokenUsage::default(),
@@ -167,6 +167,15 @@ pub fn text_response(text: &str) -> ModelResponse {
     ModelResponse {
         content: vec![ContentBlock::Text { text: text.into() }],
         status: ResponseStatus::EndTurn,
+        usage: TokenUsage::default(),
+        model: "mock".into(),
+    }
+}
+
+pub fn paused_text_response(text: &str) -> ModelResponse {
+    ModelResponse {
+        content: vec![ContentBlock::Text { text: text.into() }],
+        status: ResponseStatus::PauseTurn,
         usage: TokenUsage::default(),
         model: "mock".into(),
     }
@@ -372,7 +381,7 @@ pub async fn run_with_context_window(
             .model(Model::new("mock").context_window(context_window_size))
             .role("test"),
     );
-    werk.add_task(task);
+    werk.add_task(Task::new(task).schema(string_schema()));
 
     let _ = werk.finish().await;
     let events = collected.lock().unwrap().clone();
@@ -417,7 +426,7 @@ pub async fn run_compaction(
             .tool(TaskTool),
     );
     configure(&werk);
-    let schema = Schema::new(serde_json::json!({"type": "string"})).unwrap();
+    let schema = string_schema();
     werk.add_task(Task::new("go").schema(schema));
 
     let _ = werk.finish().await;
@@ -431,5 +440,10 @@ pub async fn run_compaction(
 }
 
 pub fn string_schema() -> Schema {
-    Schema::new(serde_json::json!({"type": "string"})).expect("valid schema")
+    Schema::new(serde_json::json!({
+        "type": "object",
+        "properties": {"answer": {"type": "string"}},
+        "required": ["answer"]
+    }))
+    .expect("valid schema")
 }

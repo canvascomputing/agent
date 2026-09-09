@@ -170,8 +170,8 @@ impl Event {
 
     /// Create a task-finished event with no result payload.
     ///
-    /// Events emitted by a Werk transition carry the stored result under
-    /// `data.result` when the task has one.
+    /// Events emitted by a Werk transition carry the stored result directly
+    /// as their data when the task has one.
     pub fn task_finished() -> Self {
         Self::new(Self::TASK_FINISHED)
     }
@@ -1013,12 +1013,12 @@ pub(crate) mod tests {
         use serde_json::json;
 
         for event in [
-            Event::tool_call_started("finish", "c-1", json!({"result": "PRIVATE RESULT"})),
+            Event::tool_call_started("finish", "c-1", json!({"answer": "PRIVATE RESULT"})),
             Event::tool_call_started("finish", "c-1", json!({"verdict": "PRIVATE RESULT"})),
             Event::tool_call_started(
                 "event",
                 "c-1",
-                json!({"name": "task_finished", "data": {"result": "PRIVATE RESULT"}}),
+                json!({"name": "task_finished", "data": {"answer": "PRIVATE RESULT"}}),
             ),
             Event::tool_call_finished("PRIVATE OUTPUT"),
             Event::text_chunk_received("PRIVATE TEXT"),

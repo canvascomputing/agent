@@ -525,9 +525,10 @@ impl Werk {
 
     /// Read every finished task together with its result.
     ///
-    /// The value passed in is the stored, schema-validated result, so a
-    /// handler never reaches into the finish tool's input shape. This is one
-    /// more entry on the [`Self::on_event`] chain.
+    /// The value passed in is the stored result. Schema-bound results have
+    /// already been validated, so a handler never reaches into the finish
+    /// tool's input shape. This is one more entry on the [`Self::on_event`]
+    /// chain.
     ///
     /// ```no_run
     /// # use agentwerk::{Task, Werk};
@@ -1683,7 +1684,10 @@ mod tests {
         attach_done_result(&werk, "t-2", "second");
         assert_eq!(
             werk.find_results("ORDER BY task.id DESC"),
-            vec![serde_json::json!("second"), serde_json::json!("first")]
+            vec![
+                serde_json::json!({"answer": "second"}),
+                serde_json::json!({"answer": "first"}),
+            ]
         );
     }
 
@@ -1708,8 +1712,8 @@ mod tests {
         assert_eq!(
             werk.find_results(query),
             [
-                serde_json::json!("clean two"),
-                serde_json::json!("clean one")
+                serde_json::json!({"answer": "clean two"}),
+                serde_json::json!({"answer": "clean one"})
             ]
         );
     }
@@ -1730,12 +1734,15 @@ mod tests {
             .all(|event| event.task_id == "t-1"));
         assert_eq!(
             werk.find_result(tasks.clone()),
-            Some(serde_json::json!("clean"))
+            Some(serde_json::json!({"answer": "clean"}))
         );
-        assert_eq!(werk.find_results(tasks), [serde_json::json!("clean")]);
+        assert_eq!(
+            werk.find_results(tasks),
+            [serde_json::json!({"answer": "clean"})]
+        );
         assert_eq!(
             werk.find_result(|task: &Task| task.label.as_deref() == Some("scan")),
-            Some(serde_json::json!("clean"))
+            Some(serde_json::json!({"answer": "clean"}))
         );
 
         let events = Query::new("event.name = task_created").unwrap();
@@ -1752,10 +1759,13 @@ mod tests {
         attach_done_result(&werk, "t-2", "answer");
 
         assert_eq!(werk.find_result("t-1"), None);
-        assert_eq!(werk.find_result("t-2"), Some(serde_json::json!("answer")));
+        assert_eq!(
+            werk.find_result("t-2"),
+            Some(serde_json::json!({"answer": "answer"}))
+        );
         assert_eq!(
             werk.find_result("task.status = finished"),
-            Some(serde_json::json!("answer"))
+            Some(serde_json::json!({"answer": "answer"}))
         );
     }
 
@@ -1769,7 +1779,10 @@ mod tests {
         attach_done_result(&werk, "t-3", "third");
         assert_eq!(
             werk.get_results(),
-            vec![serde_json::json!("first"), serde_json::json!("third")]
+            vec![
+                serde_json::json!({"answer": "first"}),
+                serde_json::json!({"answer": "third"}),
+            ]
         );
     }
 
@@ -1785,9 +1798,9 @@ mod tests {
         assert_eq!(
             werk.get_results(),
             vec![
-                serde_json::json!("first"),
-                serde_json::json!("second"),
-                serde_json::json!("third")
+                serde_json::json!({"answer": "first"}),
+                serde_json::json!({"answer": "second"}),
+                serde_json::json!({"answer": "third"})
             ]
         );
     }
@@ -1808,7 +1821,7 @@ mod tests {
         attach_done_result(&werk, "t-2", "reported");
         assert_eq!(
             werk.find_results("task.label = scan"),
-            vec![serde_json::json!("scanned")]
+            vec![serde_json::json!({"answer": "scanned"})]
         );
     }
 
@@ -1820,7 +1833,7 @@ mod tests {
         attach_done_result(&werk, "t-1", "scanned");
         assert_eq!(
             werk.find_results("task.label = scan"),
-            vec![serde_json::json!("scanned")]
+            vec![serde_json::json!({"answer": "scanned"})]
         );
     }
 
@@ -1828,11 +1841,11 @@ mod tests {
     fn find_results_keeps_the_status_the_query_names() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::labeled("scan", "a"));
-        werk.set_result("t-1", serde_json::json!("mid-flight"))
+        werk.set_result("t-1", serde_json::json!({"answer": "mid-flight"}))
             .unwrap();
         assert_eq!(
             werk.find_results("task.label = scan AND task.status = todo"),
-            vec![serde_json::json!("mid-flight")]
+            vec![serde_json::json!({"answer": "mid-flight"})]
         );
     }
 
@@ -1845,7 +1858,7 @@ mod tests {
         attach_done_result(&werk, "t-2", "reported");
         assert_eq!(
             werk.find_results(|task: &Task| task.label.as_deref() == Some("scan")),
-            vec![serde_json::json!("scanned")]
+            vec![serde_json::json!({"answer": "scanned"})]
         );
     }
 
@@ -1855,7 +1868,7 @@ mod tests {
         werk.add_task(Task::labeled("scan", "a"));
         // A result attached without the finish transition, which the default
         // leaves out because a closure names no status of its own.
-        werk.set_result("t-1", serde_json::json!("mid-flight"))
+        werk.set_result("t-1", serde_json::json!({"answer": "mid-flight"}))
             .unwrap();
         assert!(werk
             .find_results(|task: &Task| task.label.as_deref() == Some("scan"))
@@ -1935,7 +1948,7 @@ mod tests {
             werk.add_task(task);
         }
         attach_done_result(&werk, "t-1", "first");
-        werk.set_result("t-2", serde_json::json!("mid-flight"))
+        werk.set_result("t-2", serde_json::json!({"answer": "mid-flight"}))
             .unwrap();
         werk.set_finished_by("t-3", "agent").unwrap();
         attach_done_result(&werk, "t-4", "fourth");
@@ -1956,11 +1969,14 @@ mod tests {
 
         assert_eq!(
             werk.find_results(query.clone()),
-            [serde_json::json!("fourth"), serde_json::json!("first")]
+            [
+                serde_json::json!({"answer": "fourth"}),
+                serde_json::json!({"answer": "first"}),
+            ]
         );
         assert_eq!(
             werk.find_result("event.name = selected ORDER BY event.created"),
-            Some(serde_json::json!("fourth"))
+            Some(serde_json::json!({"answer": "fourth"}))
         );
     }
 
@@ -2029,7 +2045,10 @@ mod tests {
             .await;
         assert_eq!(
             results,
-            [serde_json::json!("two"), serde_json::json!("one")]
+            [
+                serde_json::json!({"answer": "two"}),
+                serde_json::json!({"answer": "one"}),
+            ]
         );
     }
 
@@ -2073,9 +2092,15 @@ mod tests {
         assert_eq!(werk.find_event(query.clone()).unwrap().task_id, "t-1");
         assert_eq!(
             werk.find_results(query.clone()),
-            [serde_json::json!("one"), serde_json::json!("two")]
+            [
+                serde_json::json!({"answer": "one"}),
+                serde_json::json!({"answer": "two"}),
+            ]
         );
-        assert_eq!(werk.find_result(query), Some(serde_json::json!("one")));
+        assert_eq!(
+            werk.find_result(query),
+            Some(serde_json::json!({"answer": "one"}))
+        );
     }
 
     #[test]
@@ -2134,14 +2159,14 @@ mod tests {
     fn joined_result_queries_honor_an_explicit_unfinished_status() {
         let (werk, _tmp) = test_werk();
         werk.add_task(Task::labeled("scan", "work"));
-        werk.set_result("t-1", serde_json::json!("mid-flight"))
+        werk.set_result("t-1", serde_json::json!({"answer": "mid-flight"}))
             .unwrap();
 
         assert_eq!(
             werk.find_results(
                 "task.status = todo AND event.name = task_created ORDER BY event.created"
             ),
-            [serde_json::json!("mid-flight")]
+            [serde_json::json!({"answer": "mid-flight"})]
         );
     }
 
@@ -2197,7 +2222,7 @@ mod tests {
     }
 
     #[test]
-    fn pending_when_a_text_only_reply_pauses_a_non_interactive_agent() {
+    fn pending_while_a_text_only_reply_awaits_the_batch_loop() {
         let (werk, _tmp) = test_werk();
         werk.add_task("x");
         let id = werk
@@ -2209,7 +2234,7 @@ mod tests {
                 text: "hello".into(),
             }]),
         );
-        // Only an interactive agent waits on the caller; the rest are retried.
+        // A batch agent still has work until its loop accepts or retries this reply.
         assert!(werk.pending(&Query::all()));
     }
 
@@ -2434,7 +2459,8 @@ mod tests {
     fn an_emitted_builtin_uses_name_based_hooks_without_changing_task_state() {
         let (werk, _tmp) = test_werk();
         let id = werk.add_task("work");
-        werk.set_result(&id, serde_json::json!("reported")).unwrap();
+        werk.set_result(&id, serde_json::json!({"answer": "reported"}))
+            .unwrap();
         let task_calls = Arc::new(AtomicUsize::new(0));
         let seen = Arc::clone(&task_calls);
         werk.on_task(move |_, _, _| {
@@ -2657,7 +2683,8 @@ mod tests {
         let id = werk
             .claim(&Query::from("task.label = scan"), "scout")
             .unwrap();
-        werk.set_result(&id, serde_json::json!("done")).unwrap();
+        werk.set_result(&id, serde_json::json!({"answer": "done"}))
+            .unwrap();
         werk.set_finished_by(&id, "scout").unwrap();
 
         assert_eq!(
@@ -2690,7 +2717,7 @@ mod tests {
         // resolve this.
         assert_eq!(
             werk.finish_tasks(move |t: &Task| t.id == id).await,
-            vec![serde_json::json!("done")]
+            vec![serde_json::json!({"answer": "done"})]
         );
     }
 
@@ -2733,7 +2760,10 @@ mod tests {
 
         attach_done_result(&werk, &id, "lead");
 
-        assert_eq!(*seen.lock().unwrap(), vec![(id, serde_json::json!("lead"))]);
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![(id, serde_json::json!({"answer": "lead"}))]
+        );
     }
 
     #[test]
@@ -2811,7 +2841,8 @@ mod tests {
 
         // A failed tool call the model recovered from: the task finishes.
         emit_event(&werk, &id, "agent", tool_call_failed("boom"));
-        werk.set_task_finished(&id, "done").unwrap();
+        werk.set_task_finished(&id, serde_json::json!({"answer": "done"}))
+            .unwrap();
 
         let task = werk.get_task(&id).unwrap();
         assert_eq!(task.status, Status::Finished);
@@ -2904,7 +2935,8 @@ mod tests {
         let id = werk
             .claim(&Query::from("task.label = scout"), "agent")
             .unwrap();
-        werk.set_result(&id, serde_json::json!("lead")).unwrap();
+        werk.set_result(&id, serde_json::json!({"answer": "lead"}))
+            .unwrap();
         werk.set_finished_by(&id, "agent").unwrap();
         werk.on_result(|werk, _, _| {
             werk.add_task(Task::new("hunt").label("sniper"));
@@ -2937,7 +2969,8 @@ mod tests {
                 .push(werk.find_results("task.label = scan").len());
         });
         for id in scans(&werk, 2) {
-            werk.set_task_finished(&id, "clean").unwrap();
+            werk.set_task_finished(&id, serde_json::json!({"answer": "clean"}))
+                .unwrap();
         }
 
         assert_eq!(*counts.lock().unwrap(), vec![1, 2]);
@@ -2960,13 +2993,14 @@ mod tests {
             async move { record.lock().unwrap().push((task.id, result)) }
         });
         let id = werk.add_task("scan the corpus");
-        werk.set_task_finished(&id, "clean").unwrap();
+        werk.set_task_finished(&id, serde_json::json!({"answer": "clean"}))
+            .unwrap();
 
         werk.finish().await;
 
         assert_eq!(
             *seen.lock().unwrap(),
-            vec![(id, serde_json::json!("clean"))]
+            vec![(id, serde_json::json!({"answer": "clean"}))]
         );
     }
 
@@ -2982,7 +3016,8 @@ mod tests {
             });
         }
         let id = werk.add_task("scan the corpus");
-        werk.set_task_finished(&id, "clean").unwrap();
+        werk.set_task_finished(&id, serde_json::json!({"answer": "clean"}))
+            .unwrap();
 
         werk.finish().await;
 
@@ -3010,7 +3045,8 @@ mod tests {
             }
         });
         let id = werk.add_task("scan the corpus");
-        werk.set_task_finished(&id, "clean").unwrap();
+        werk.set_task_finished(&id, serde_json::json!({"answer": "clean"}))
+            .unwrap();
 
         werk.finish().await;
 
@@ -3036,8 +3072,10 @@ mod tests {
         });
         let first = werk.add_task("scan the first half");
         let second = werk.add_task("scan the second half");
-        werk.set_task_finished(&first, "clean").unwrap();
-        werk.set_task_finished(&second, "clean").unwrap();
+        werk.set_task_finished(&first, serde_json::json!({"answer": "clean"}))
+            .unwrap();
+        werk.set_task_finished(&second, serde_json::json!({"answer": "clean"}))
+            .unwrap();
 
         let cancelled = tokio::time::timeout(Duration::from_millis(50), werk.finish());
         assert!(cancelled.await.is_err());
@@ -3062,8 +3100,10 @@ mod tests {
         });
         let first = werk.add_task("scan the first half");
         let second = werk.add_task("scan the second half");
-        werk.set_task_finished(&first, "clean").unwrap();
-        werk.set_task_finished(&second, "clean").unwrap();
+        werk.set_task_finished(&first, serde_json::json!({"answer": "clean"}))
+            .unwrap();
+        werk.set_task_finished(&second, serde_json::json!({"answer": "clean"}))
+            .unwrap();
 
         werk.finish().await;
 
@@ -3097,14 +3137,15 @@ mod tests {
             }
         });
         let id = werk.add_task("scan the corpus");
-        werk.set_task_finished(&id, 1).unwrap();
+        werk.set_task_finished(&id, serde_json::json!({"count": 1}))
+            .unwrap();
 
         werk.finish().await;
 
         // One entry each: the two kinds share one queueing hook.
         assert_eq!(
             *seen.lock().unwrap(),
-            vec!["result 1", "task task_finished"]
+            vec!["result {\"count\":1}", "task task_finished"]
         );
     }
 
@@ -3173,7 +3214,8 @@ mod tests {
             werk.add_task(Task::new("hunt").label("sniper"));
         });
         let id = werk.add_task(Task::new("scout").label("scout"));
-        werk.set_task_finished(&id, "lead").unwrap();
+        werk.set_task_finished(&id, serde_json::json!({"answer": "lead"}))
+            .unwrap();
 
         werk.finish().await;
 
@@ -3192,7 +3234,8 @@ mod tests {
         });
         let id = werk.add_task("scan the corpus");
 
-        werk.set_task_finished(&id, "clean").unwrap();
+        werk.set_task_finished(&id, serde_json::json!({"answer": "clean"}))
+            .unwrap();
         assert!(seen.lock().unwrap().is_empty());
 
         werk.finish().await;
@@ -3226,10 +3269,12 @@ mod tests {
         });
         let scans = scans(&werk, 2);
 
-        werk.set_task_finished(&scans[0], "clean").unwrap();
+        werk.set_task_finished(&scans[0], serde_json::json!({"answer": "clean"}))
+            .unwrap();
         assert!(werk.find_tasks("task.label = report").is_empty());
 
-        werk.set_task_finished(&scans[1], "clean").unwrap();
+        werk.set_task_finished(&scans[1], serde_json::json!({"answer": "clean"}))
+            .unwrap();
         assert_eq!(werk.find_tasks("task.label = report").len(), 1);
     }
 
@@ -3245,7 +3290,8 @@ mod tests {
         let id = werk
             .claim(&Query::from("task.label = scout"), "agent")
             .unwrap();
-        werk.set_result(&id, serde_json::json!("lead")).unwrap();
+        werk.set_result(&id, serde_json::json!({"answer": "lead"}))
+            .unwrap();
         werk.set_finished_by(&id, "agent").unwrap();
         // The handler ran inside `set_finished_by`, so the Werk is never
         // observably empty between the task finishing and the follow-up.
@@ -3301,7 +3347,8 @@ mod tests {
             .claim(&Query::from("task.label = scan"), "analyst")
             .unwrap();
         werk.append_reply(&id, Reply::user_text("hello"));
-        werk.set_result(&id, serde_json::json!("done")).unwrap();
+        werk.set_result(&id, serde_json::json!({"answer": "done"}))
+            .unwrap();
         werk.set_finished_by(&id, "analyst").unwrap();
 
         // `replies` is `#[serde(skip)]`, so replies here prove the
@@ -3312,7 +3359,7 @@ mod tests {
                 "analyst".to_string(),
                 id,
                 1,
-                Some(serde_json::json!("done"))
+                Some(serde_json::json!({"answer": "done"}))
             )]
         );
     }
@@ -3424,7 +3471,7 @@ mod tests {
 
         assert_eq!(
             werk.finish_tasks("scan").await,
-            vec![serde_json::json!("scanned")]
+            vec![serde_json::json!({"answer": "scanned"})]
         );
     }
 
@@ -3438,7 +3485,10 @@ mod tests {
 
         assert_eq!(
             werk.finish().await,
-            vec![serde_json::json!("scanned"), serde_json::json!("reported")]
+            vec![
+                serde_json::json!({"answer": "scanned"}),
+                serde_json::json!({"answer": "reported"}),
+            ]
         );
     }
 
@@ -3453,7 +3503,7 @@ mod tests {
 
         assert_eq!(
             werk.finish_task("ORDER BY task.id DESC").await,
-            Some(serde_json::json!("reported"))
+            Some(serde_json::json!({"answer": "reported"}))
         );
     }
 

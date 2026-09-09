@@ -1,4 +1,4 @@
-Finish the current task and return its final result. Call it once, after the work is complete.
+Finish the current task with a structured final result.
 
-- Follow the arguments shown for the current task. Pass final-answer fields at the top level when they appear there; when `result` appears, put the final answer in `result`.
-- Pass native JSON values, NEVER JSON written inside a string, because encoding a value as text makes the call invalid.
+- Pass one JSON object using the fields shown for the task.
+- NEVER encode the object as a string, because the call will be rejected.

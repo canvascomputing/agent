@@ -28,7 +28,7 @@ async fn finish(werk: &Werk) {
 
 fn research(werk: &Werk, result: &str) -> String {
     let id = werk.add_task(Task::labeled("research", "research"));
-    werk.set_task_finished(&id, serde_json::json!(result))
+    werk.set_task_finished(&id, serde_json::json!({"research": result}))
         .unwrap();
     id
 }
@@ -46,10 +46,13 @@ async fn first_request_sees_values_and_results_supplied_after_the_task_is_added(
     werk.set_template("company", "Acme");
     research(&werk, "findings");
     finish(&werk).await;
-    assert_eq!(provider.received_system_prompts(), ["Acme: findings"]);
+    assert_eq!(
+        provider.received_system_prompts(),
+        [r#"Acme: {"research":"findings"}"#]
+    );
     assert_eq!(
         user_text(&provider.received()[0]),
-        "Write for Acme: findings\n"
+        "Write for Acme: {\"research\":\"findings\"}\n"
     );
 }
 
@@ -70,7 +73,7 @@ async fn runtime_context_values_render_in_roles_and_string_tasks() {
 async fn later_template_and_result_updates_do_not_change_the_task_prompts() {
     let (werk, _dir) = session();
     let provider = MockProvider::with_results(vec![
-        Ok(text_response("continue")),
+        Ok(paused_text_response("continue")),
         Ok(write_result_response("done")),
     ]);
     let first = research(&werk, "old research");
@@ -86,13 +89,19 @@ async fn later_template_and_result_updates_do_not_change_the_task_prompts() {
         }
     });
     finish(&werk).await;
-    let frozen = format!("Old: old research | {}", first_path.display());
+    let frozen = format!(
+        r#"Old: {{"research":"old research"}} | {}"#,
+        first_path.display()
+    );
     assert_eq!(
         provider.received_system_prompts(),
         [frozen.clone(), frozen.clone()]
     );
     let requests = provider.received();
-    assert_eq!(user_text(&requests[0]), "Old: old research\n");
+    assert_eq!(
+        user_text(&requests[0]),
+        "Old: {\"research\":\"old research\"}\n"
+    );
     assert_eq!(user_text(&requests[0][..1]), user_text(&requests[1][..1]));
     let task = werk.get_task(&id).unwrap();
     let recorded: Vec<_> = task
@@ -133,7 +142,7 @@ impl ProviderLike for SuspendedProvider {
 async fn updates_during_an_in_flight_request_do_not_change_the_task_prompt() {
     let (werk, _dir) = session();
     let recorded = MockProvider::with_results(vec![
-        Ok(text_response("continue")),
+        Ok(paused_text_response("continue")),
         Ok(write_result_response("done")),
     ]);
     let provider = Arc::new(SuspendedProvider {
@@ -169,7 +178,7 @@ async fn retry_and_following_requests_reuse_the_task_prompt() {
     let (werk, _dir) = session();
     let provider = MockProvider::with_results(vec![
         Err(rate_limit()),
-        Ok(text_response("continue")),
+        Ok(paused_text_response("continue")),
         Ok(write_result_response("done")),
     ]);
     werk.set_policy(Policy {
@@ -197,7 +206,7 @@ async fn retry_and_following_requests_reuse_the_task_prompt() {
 async fn template_updates_after_the_first_request_cannot_change_or_fail_the_task() {
     let (werk, _dir) = session();
     let provider = MockProvider::with_results(vec![
-        Ok(text_response("continue")),
+        Ok(paused_text_response("continue")),
         Ok(write_result_response("done")),
     ]);
     werk.set_template("company", "Old");
@@ -224,7 +233,7 @@ async fn template_updates_after_the_first_request_cannot_change_or_fail_the_task
 async fn shared_values_with_expressions_remain_literal_across_requests() {
     let (werk, _dir) = session();
     let provider = MockProvider::with_results(vec![
-        Ok(text_response("continue")),
+        Ok(paused_text_response("continue")),
         Ok(write_result_response("done")),
     ]);
     werk.set_template("data", "{{ company }} {{ result: absent }}");
