@@ -23,7 +23,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
-      - run: sudo apt-get update && sudo apt-get install -y ripgrep
       - run: make test
 
   python-tests:
@@ -35,7 +34,6 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: sudo apt-get update && sudo apt-get install -y ripgrep
       - run: python -m venv .venv
       - run: .venv/bin/python -m pip install './crates/agentwerk-py[test]'
       - run: .venv/bin/python -m pytest crates/agentwerk-py/tests -q -m 'not live'
